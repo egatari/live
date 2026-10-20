@@ -149,7 +149,7 @@ export class Room extends DurableObject {
     const adminHash = await sha256(spec.adminKey);
     this.meta = {
       room: spec.room, key: spec.key, keyGen: 1, adminHash, window: spec.window, graceHours: spec.graceHours,
-      requireApproval: spec.requireApproval, open: true, activities: spec.activities, seen: {},
+      requireApproval: spec.requireApproval, open: true, activities: spec.activities, seen: {}, size: spec.size,
       participants: 0, itemCount: 0, createdAt: new Date().toISOString(),
     };
     await this.saveMeta();
@@ -291,8 +291,9 @@ export class Room extends DurableObject {
     }
     const reply = (msg) => this.send(ws, { ...msg, ...(m.ref ? { ref: m.ref } : {}) });
     const fail = (code) => reply({ t: "error", code });
-    const p = await this.person(a.pid);
-    if (!p) return this.closeWs(ws, CLOSE.NOT_APPROVED);
+    const p = (await this.person(a.pid)) || { pid: a.pid, status: a.status, name: "", asked: 0, first: a.since };
+    // 4441 means a definite decline by the teacher, never "still pending".
+    if (p.status === "denied") return this.closeWs(ws, CLOSE.NOT_APPROVED);
 
     if (m.t === "name") {
       p.name = m.name;

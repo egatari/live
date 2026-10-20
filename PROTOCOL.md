@@ -34,20 +34,23 @@ All JSON responses carry `cache-control: no-store`. No endpoint sets CORS header
 
 | Method and path | Auth | Body / reply |
 |---|---|---|
-| `GET /` | none | The teacher page (HTML, en/ja) with a strict CSP (§6). `/teacher.js` and `/teacher.css` are its only resources. |
-| `POST /api/rooms` | none; `Origin`, if present, must be the service origin | `createRequest` → `201 createResponse`. Errors: `400`, `403` (foreign Origin), `413`, `415`. |
+| `GET /` | none | The create page (HTML, en/ja). The only page that loads Cloudflare Turnstile. |
+| `GET /room` | none (the teacher key is in the fragment) | The room page (teacher dashboard). Its CSP allows no third party. `/teacher.js` and `/teacher.css` are the pages' only own resources. |
+| `POST /api/rooms` | a Turnstile token in the body; `Origin`, if present, must be the service origin; 5 per minute per sender | `createRequest` → `201 createResponse`. Errors: `400` (`bad_request`, `window_too_long`, `room_too_large`, `turnstile_required`), `403` (`forbidden`: foreign Origin; `turnstile_failed`), `413`, `415`, `429` (`rate_limited`), `503` (`unavailable`: Turnstile or the limiter not configured, or siteverify unreachable). |
 | `GET /api/rooms/{room}/results` | `Authorization: Bearer <adminKey>` | `200 results`; `401` without or with a wrong key; `404` when the room does not exist (or was deleted). |
 | `GET /api/health` | none | `{"v":1,"ok":true,"service":"egatari-live"}` |
 
 Errors are `httpError`: `{"v":1, "error": "<code>", "message": "..."}`.
 
-**Create.** `createRequest` is `{v, window: {from, to}, graceHours?, requireApproval?, activities?}`:
+**Create.** `createRequest` is `{v, window: {from, to}, turnstile, size?, graceHours?, requireApproval?, activities?}`:
 
-- `window.to` must be after `window.from` and in the future; at most 7 days long; it may start at most 180 days ahead.
+- `turnstile`: the Cloudflare Turnstile token from the widget on the create page (action `create-room`). The service verifies it with siteverify after validating the rest of the request, so a malformed request does not spend the token. Each token works once.
+- `window.to` must be after `window.from` and in the future; at most **3 hours** long (`window_too_long`); it may start at most 180 days ahead.
+- `size` (optional): the number of learners expected. More than **60** is refused (`room_too_large`). v1 rooms are for one class.
 - `graceHours` (default 24, 0–168): how long after `window.to` the room is kept so the teacher can download results. Then the room deletes itself.
 - `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees.
 
-`createResponse` returns `endpoint`, `room`, `key`, `adminKey`, the `window`, `graceHours`, `expiresAt` (= `window.to` + grace), `requireApproval` and `teacherUrl` = `<endpoint>/#room=<room>&admin=<adminKey>`. The teacher page shows the link once and tells the teacher to bookmark it. There is no recovery: a teacher who loses it creates a new room.
+`createResponse` returns `endpoint`, `room`, `key`, `adminKey`, the `window`, `graceHours`, `expiresAt` (= `window.to` + grace), `requireApproval` and `teacherUrl` = `<endpoint>/room#room=<room>&admin=<adminKey>`. The teacher page shows the link once and tells the teacher to bookmark it. There is no recovery: a teacher who loses it creates a new room.
 
 **Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text` and moderation flags (`read`, `answered`, `shown`, `hidden`), for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
 
@@ -82,6 +85,8 @@ Projected questions carry `id`, `activity`, `step` and `text` only, never who as
 | `ask` | `activity`, `step`, `text` (1–500 characters) | a question for a `qa` activity. `step` is the step key under which the activity is declared, or, for an activity declared under `*`, the step key on screen when the learner pressed Send (the player MAY send `*`). |
 | `vote` | `activity`, `step`, `choice` (0-based index) | a single-choice poll; a new vote replaces the previous one |
 | `name` | `name` (0–40 characters; empty clears) | only if the learner typed a name; allowed while waiting, so the teacher can recognise who is waiting |
+
+**Approval.** In a room that requires approval, a learner the teacher has not decided on yet gets `welcome` with `status: "waiting"` and **stays connected**; `admitted` follows when the teacher admits them. Close code **4441 always means a definite decline**: it is sent only after the teacher declined this pid (`deny`), either at that moment or when the declined pid connects again. It never means "still pending". A player shows "The teacher did not admit you" and does not reconnect by itself (the teacher may later admit the pid; a manual "Try again" is fine).
 | `ping` | | keep-alive; answered without waking the room (Hibernation auto-response). Send it exactly as `{"v":1,"t":"ping"}`. At most once per 30 s. |
 
 Nothing else is sent: no viewing position, timing, playback events or device information. `ask` and `vote` from a learner who is still waiting get `error not_admitted`.
@@ -134,11 +139,16 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 | `wrong_kind` | `ask` to a poll or `vote` to a Q&A | kept |
 | `bad_choice` | choice out of range | kept |
 | `text_too_long`, `empty_text` | text caps | kept |
-| `rate_limited` | the participant's message budget is empty | kept; closed 4429 after 10 drops |
+| `rate_limited` | the participant's message budget is empty; on create: too many rooms from this sender | kept; closed 4429 after 10 drops |
 | `quota_exceeded` | more than 20 questions from one participant | kept |
 | `room_limit` | the room is full of items, activities or shown questions | kept |
 | `not_admitted` | waiting for approval | kept |
 | `not_found`, `bad_request`, `unauthorized`, `forbidden` | HTTP and teacher errors | — |
+| `window_too_long` | create: window longer than 3 hours | — |
+| `room_too_large` | create: `size` above 60 | — |
+| `turnstile_required` | create: no Turnstile token | — |
+| `turnstile_failed` | create: siteverify refused the token (invalid, expired, spent, wrong action or hostname) | — |
+| `unavailable` | create: Turnstile secret or limiter not configured, or siteverify unreachable (fails closed) | — |
 
 **Close codes** (also in `protocol/close-codes.json`). "Retry" says whether a player may reconnect by itself (with backoff, still only inside the window).
 
@@ -153,26 +163,31 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 | 4423 | `room_closed` | the teacher closed the room | yes, slowly (≥ 30 s, with jitter) |
 | 4425 | `too_early` | the window has not started (clock skew) | yes, at `window.from` |
 | 4429 | `rate_limited` | too many messages | yes, after ≥ 60 s |
-| 4430 | `room_full` | room size limit | yes, after ≥ 60 s |
+| 4430 | `room_full` | room size limit (60 connected, 200 participants ever, or 60 waiting) | yes, after ≥ 60 s |
 | 4440 | `key_replaced` | the teacher replaced the key; this file no longer works | no |
-| 4441 | `not_approved` | the teacher declined this participant | no |
+| 4441 | `not_approved` | definite decline by the teacher (never "pending"; pending is a `waiting` welcome) | no |
 
 The server tolerates 2 minutes of clock skew at both window edges.
 
 ## 6. Limits (constants, `src/limits.js`)
 
-| Limit | Value |
-|---|---|
-| learner frame | 2048 bytes |
-| question / name / poll prompt / choice | 500 / 40 / 300 / 100 characters |
-| rate | bucket of 5 messages, one more every 2 s; closed after 10 dropped messages |
-| questions per participant | 20 |
-| concurrent learners per room | 300 |
-| participants ever per room | 1000 |
-| questions per room | 1000; at most 50 shown at once |
-| activities per room | 64; poll choices 2–12 |
-| teacher sockets | 4 |
-| window | ≤ 7 days, starting ≤ 180 days ahead; grace 0–168 h (default 24 h) |
+v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to 2 hours. Each cap leaves headroom over that target. Larger rooms will need a light sign-in for teachers in a later version.
+
+| Limit | Value | Why |
+|---|---|---|
+| learner frame | 2048 bytes | a 500-character question in UTF-8 plus the envelope |
+| question / name / poll prompt / choice | 500 / 40 / 300 / 100 characters | text only |
+| rate | bucket of 5 messages, one more every 2 s; closed after 10 dropped messages | a person types far slower |
+| questions per participant | 20 | |
+| concurrent learners per room | **60** | 40 + 50 % for late joiners and a second device |
+| participants ever per room | **200** | 5× the class: a new browser or private window makes a new pid |
+| waiting at once | 60 | the whole room may wait |
+| questions per room | **400**; at most 30 shown at once | 10 per expected learner; 30 fit a projected screen |
+| activities per room | 64; poll choices 2–12 | |
+| teacher sockets | 4 | a laptop, a projector, a phone |
+| window | **≤ 3 h**, starting ≤ 180 days ahead | a 2-hour lesson plus an hour of slack |
+| grace for results | 0–168 h, default 24 h | time to download results |
+| room creation | 5 per 60 s per sender (Workers Rate Limiting binding, by `CF-Connecting-IP`), plus Turnstile | |
 
 `welcome.limits` gives learners the ones a player needs to shape its UI.
 
@@ -184,6 +199,7 @@ The server tolerates 2 minutes of clock skew at both window edges.
 4. Show activities in a pane outside the stage. In Studio, the player-side client listens to the `deck:pos` event (`detail.key` is the step key) to show a step's poll when that step is reached; `qa` is available for the whole window.
 5. While connected, show a persistent indicator with Disconnect. Reconnect only for close codes marked "retry", with backoff; never outside the window.
 6. Show every server-provided string as text (`textContent`), never as HTML.
+6a. Never load Turnstile or anything else from the endpoint. Turnstile exists only on the service's create page; the learner endpoint does not use it.
 7. Producers write a CSP `<meta>` into derivatives that carry `live`, with `connect-src` limited to the endpoint (`wss://live.egatari.org`).
 
 ---
@@ -192,10 +208,11 @@ The server tolerates 2 minutes of clock skew at both window edges.
 
 Egatari Live は、配った教材（再生専用のファイル）から、そのまま授業の Q&A と投票に参加するための通信の約束です。
 
-- **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから）。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
+- **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから。Cloudflare Turnstile のトークンが要る。送り手ごとに 1 分 5 部屋まで。時間の窓は 3 時間まで（`window_too_long`）、人数の見込みは 60 人まで（`room_too_large`））。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
 - **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
 - **教員の WebSocket**：`/ws/teacher?room=`。最初のメッセージで `adminKey` を送る。部屋を開ける・閉じる、承認（待合）、参加の鍵の取り替え（古い鍵の人は切断）、質問の「読んだ・答えた・映す・隠す」、投票の集計。
 - **版**：すべてのメッセージに `v: 1`。知らない項目・知らない種類は拒否する。
+- **承認**：待っている人には `welcome`（`status: "waiting"`）が届き、接続は切れない。4441 は教員が「断る」を選んだときだけで、「まだ待っている」の意味にはならない。
 - **切断の番号**：4400 不正なメッセージ、4401 教員の鍵がない、4403 鍵が違う、4404 部屋がない、4409 同じ id の新しい接続、4410 期限切れ、4423 部屋が閉じた、4425 まだ始まっていない、4429 送りすぎ、4430 満員、4440 鍵が替わった、4441 承認されなかった。
-- **上限**：1 通 2048 バイト、質問 500 字、名前 40 字、1 人 20 問、同時 300 人など（`src/limits.js` の定数）。
+- **上限**：v1 の部屋は 1 クラス分（文字の Q&A と投票、40 人ほど、2 時間まで）。1 通 2048 バイト、質問 500 字、名前 40 字、1 人 20 問、同時 60 人、延べ 200 人、部屋の質問 400 件、時間の窓 3 時間まで（`src/limits.js` の定数）。もっと大きな部屋には、のちの版で軽いサインインが要る。
 - `protocol/` の Schema と例は MIT で、Studio に取り込める。

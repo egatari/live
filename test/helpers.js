@@ -65,12 +65,20 @@ export function windowAround(now = Date.now(), beforeMs = 60_000, afterMs = 3600
   return { from: new Date(now - beforeMs).toISOString(), to: new Date(now + afterMs).toISOString() };
 }
 
-export async function createRoom(body = {}) {
-  const res = await SELF.fetch(ORIGIN + "/api/rooms", {
+export const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
+// A fresh sender address per request, so that the per-sender creation limit does not couple tests.
+let ipCounter = 0;
+
+export function createRequest(body = {}, headers = {}) {
+  return new Request(ORIGIN + "/api/rooms", {
     method: "POST",
-    headers: { "content-type": "application/json", origin: ORIGIN },
-    body: JSON.stringify({ v: 1, window: windowAround(), ...body }),
+    headers: { "content-type": "application/json", origin: ORIGIN, "cf-connecting-ip": "2001:db8::" + (++ipCounter).toString(16), ...headers },
+    body: JSON.stringify({ v: 1, window: windowAround(), turnstile: DUMMY_TOKEN, ...body }),
   });
+}
+
+export async function createRoom(body = {}) {
+  const res = await SELF.fetch(createRequest(body));
   const json = await res.json();
   if (res.status !== 201) throw new Error("create failed: " + JSON.stringify(json));
   return json;

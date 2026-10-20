@@ -30,6 +30,12 @@
       anonymous: "(no name)", at: "at",
       footer: "Egatari Live, part of Egatari Studio. No accounts, no telemetry; rooms are deleted after their grace period.",
       badJson: "Activities is not valid JSON.",
+      size: "Expected learners (max 60)", bookmarked: "I have bookmarked it",
+      turnstileDev: "Development mode: no Turnstile site key is set, so a test token is sent.",
+      turnstileWait: "Please complete the check above first.",
+      err_window_too_long: "A room is open for at most 3 hours.", err_room_too_large: "A room holds at most 60 learners.",
+      err_rate_limited: "Too many rooms created from here. Try again in a minute.",
+      err_turnstile_failed: "The check failed. Please try again.", err_turnstile_required: "Please complete the check first.",
     },
     ja: {
       createTitle: "授業の部屋を作る",
@@ -58,6 +64,12 @@
       anonymous: "（名前なし）", at: "",
       footer: "Egatari Live（Egatari Studio の一部）。アカウントも利用状況の記録もありません。部屋は猶予の時間のあと消えます。",
       badJson: "活動の JSON が正しくありません。",
+      size: "参加する人数の見込み（最大 60）", bookmarked: "ブックマークしました",
+      turnstileDev: "開発用：Turnstile のサイトキーがないため、試験用のトークンを送ります。",
+      turnstileWait: "先に上の確認を済ませてください。",
+      err_window_too_long: "部屋を開けておけるのは 3 時間までです。", err_room_too_large: "1 部屋は 60 人までです。",
+      err_rate_limited: "ここから作った部屋が多すぎます。1 分ほど待ってから作ってください。",
+      err_turnstile_failed: "確認に失敗しました。もう一度お試しください。", err_turnstile_required: "先に確認を済ませてください。",
     },
   };
   let lang = "en";
@@ -105,30 +117,64 @@
   async function copy(text) { try { await navigator.clipboard.writeText(text); } catch { /* user can select manually */ } }
 
   // ------------------------------------------------------------- create
+  // Turnstile is loaded only here, on the create page; the room page and learners never load it.
+  const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";   // Cloudflare's test token, accepted only by test secrets
+  const TS = { id: null, token: null };
+  function loadTurnstile() {
+    const box = $("turnstile"), sitekey = box.dataset.sitekey || "";
+    if (!sitekey) { $("turnstile-note").hidden = false; TS.token = DUMMY_TOKEN; return; }
+    const sc = document.createElement("script");
+    sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    sc.addEventListener("load", () => {
+      TS.id = window.turnstile.render(box, {
+        sitekey, action: "create-room", language: lang,
+        callback: (tok) => { TS.token = tok; },
+        "expired-callback": () => { TS.token = null; },
+        "error-callback": () => { TS.token = null; },
+      });
+    });
+    document.head.append(sc);
+  }
+  function resetTurnstile() {
+    if (TS.id !== null && window.turnstile) { window.turnstile.reset(TS.id); TS.token = null; }
+  }
+
   function showCreate() {
     $("create").hidden = false;
+    loadTurnstile();
     const now = new Date(); now.setSeconds(0, 0);
     $("from").value = localInput(now);
     $("to").value = localInput(new Date(now.getTime() + 2 * 3600 * 1000));
     $("create-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       $("create-error").textContent = "";
+      if (!TS.token) { $("create-error").textContent = t("turnstileWait"); return; }
       const body = { v: 1, window: { from: rfc3339($("from").value), to: rfc3339($("to").value) },
-        graceHours: Number($("grace").value || 24), requireApproval: $("approval").checked };
+        graceHours: Number($("grace").value || 24), requireApproval: $("approval").checked, turnstile: TS.token };
+      if ($("size").value) body.size = Number($("size").value);
       const a = $("activities").value.trim();
       if (a) { try { body.activities = JSON.parse(a); } catch { $("create-error").textContent = t("badJson"); return; } }
       const res = await fetch("/api/rooms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const out = await res.json().catch(() => ({}));
-      if (!res.ok) { $("create-error").textContent = out.message || out.error || String(res.status); return; }
-      history.replaceState(null, "", `#room=${out.room}&admin=${out.adminKey}`);
-      S.room = out.room; S.admin = out.adminKey;
-      $("create").hidden = true;
-      $("created").hidden = false;
-      $("teacher-link").href = location.href;
-      $("teacher-link").textContent = location.href;
-      $("copy-link").addEventListener("click", () => copy(location.href));
-      startDash();
+      if (!res.ok) {
+        const known = T.en["err_" + out.error] ? t("err_" + out.error) : null;
+        $("create-error").textContent = known || out.message || out.error || String(res.status);
+        resetTurnstile();
+        return;
+      }
+      // The teacher key goes only into the fragment of the room page; replace() keeps it out of history here.
+      location.replace(`/room#room=${out.room}&admin=${out.adminKey}&new=1`);
     });
+  }
+
+  function showCreated() {
+    const clean = `${location.origin}/room#room=${S.room}&admin=${S.admin}`;
+    history.replaceState(null, "", clean);
+    $("created").hidden = false;
+    $("teacher-link").href = clean;
+    $("teacher-link").textContent = clean;
+    $("copy-link").addEventListener("click", () => copy(clean));
+    $("dismiss-created").addEventListener("click", () => { $("created").hidden = true; });
   }
 
   // ------------------------------------------------------------- dashboard
@@ -275,6 +321,16 @@
       applyLang();
     });
     applyLang();
-    if (S.room && S.admin) startDash(); else showCreate();
+    const page = document.body.dataset.page;
+    if (page === "create") {
+      // Old bookmarks of the form /#room=…&admin=… go to the room page.
+      if (S.room && S.admin) { location.replace("/room" + location.hash); return; }
+      showCreate();
+    } else if (S.room && S.admin) {
+      if (hash.get("new") === "1") showCreated();
+      startDash();
+    } else {
+      location.replace("/");
+    }
   });
 })();

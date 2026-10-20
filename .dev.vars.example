@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `npm run dev`. These are Cloudflare's documented Turnstile TEST keys, not secrets:
+# 1x0000000000000000000000000000000AA always passes, 2x...AA always fails, 3x...AA "token already spent".
+# The server answers test secrets locally, so development works offline.
+TURNSTILE_SECRET=1x0000000000000000000000000000000AA

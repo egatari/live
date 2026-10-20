@@ -5,6 +5,7 @@ import {
   CLOSE, ERR, ProtocolError, RE_ROOM, checkCreate, newRoomId, newLearnerKey, newAdminKey,
 } from "./protocol.js";
 import { rejectSocket } from "./room.js";
+import { verifyTurnstile } from "./turnstile.js";
 
 export { Room } from "./room.js";
 
@@ -18,14 +19,22 @@ const API_HEADERS = {
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: API_HEADERS });
 const fail = (status, code, message) => json({ v: 1, error: code, ...(message ? { message } : {}) }, status);
 
-/** The strict CSP of the teacher page: own scripts and styles, sockets to this origin only. */
-export function teacherCsp(origin) {
+const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
+
+/**
+ * CSP of the teacher pages. The room page (`/room`, which holds the teacher key in its fragment) allows
+ * only its own scripts and sockets to this origin. The create page (`/`) additionally allows the
+ * Turnstile widget, as Cloudflare documents: script-src and frame-src for challenges.cloudflare.com.
+ */
+export function teacherCsp(origin, page = "room") {
   const ws = origin.replace(/^http/, "ws");
+  const create = page === "create";
   return [
     "default-src 'none'",
-    "script-src 'self'",
+    create ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
     "style-src 'self'",
-    `connect-src 'self' ${ws}`,
+    create ? "connect-src 'self'" : `connect-src 'self' ${ws}`,
+    ...(create ? [`frame-src ${TURNSTILE_ORIGIN}`] : []),
     "img-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
@@ -33,9 +42,11 @@ export function teacherCsp(origin) {
   ].join("; ");
 }
 
-function pageHeaders(res, origin) {
+const pageOf = (path) => (path === "/" || path === "/index.html" ? "create" : "room");
+
+function pageHeaders(res, origin, page) {
   const h = new Headers(res.headers);
-  h.set("content-security-policy", teacherCsp(origin));
+  h.set("content-security-policy", teacherCsp(origin, page));
   h.set("referrer-policy", "no-referrer");
   h.set("x-content-type-options", "nosniff");
   h.set("x-frame-options", "DENY");
@@ -52,15 +63,28 @@ async function createRoom(request, env, origin) {
   // Only the teacher page (same origin) or a non-browser client (no Origin) may create rooms.
   const o = request.headers.get("origin");
   if (o !== null && o !== origin) return fail(403, ERR.FORBIDDEN, "cross-origin room creation is not allowed");
+  // Per-sender rate limit (Workers Rate Limiting binding, keyed by the client IP; not stored anywhere).
+  if (!env.CREATE_LIMITER) return fail(503, ERR.UNAVAILABLE, "rate limiter not configured");
+  const ip = request.headers.get("cf-connecting-ip") || "";
+  const { success } = await env.CREATE_LIMITER.limit({ key: "create:" + (ip || "unknown") });
+  if (!success) return fail(429, ERR.RATE_LIMITED, "too many rooms created; try again in a minute");
   if (!(request.headers.get("content-type") || "").startsWith("application/json")) return fail(415, ERR.BAD_REQUEST, "send application/json");
   const text = await request.text();
   if (text.length > L.MAX_CREATE_BODY_BYTES) return fail(413, ERR.TOO_LARGE);
-  let spec;
+  let spec, token;
   try {
-    spec = checkCreate(JSON.parse(text), Date.now());
+    const body = JSON.parse(text);
+    spec = checkCreate(body, Date.now());
+    token = body.turnstile;
   } catch (e) {
     return fail(400, e instanceof ProtocolError ? e.code : ERR.BAD_REQUEST, e instanceof ProtocolError ? e.message : "body is not JSON");
   }
+  // Turnstile, verified last so that a malformed request does not spend the learner's token
+  if (typeof token !== "string" || !token || token.length > L.MAX_TURNSTILE_TOKEN_CHARS) {
+    return fail(400, ERR.TURNSTILE_REQUIRED, "a Turnstile token is required");
+  }
+  const v = await verifyTurnstile(env, token, ip, { expectedHostname: new URL(origin).hostname });
+  if (!v.ok) return fail(v.status, v.status === 503 ? ERR.UNAVAILABLE : ERR.TURNSTILE_FAILED, "Turnstile: " + v.reason);
   for (let attempt = 0; attempt < 4; attempt++) {
     const room = newRoomId(), key = newLearnerKey(), adminKey = newAdminKey();
     const res = await stub(env, room).fetch("https://do/do/create", {
@@ -71,7 +95,7 @@ async function createRoom(request, env, origin) {
     return json({
       v: 1, endpoint: origin, room, key, adminKey, window: spec.window, graceHours: spec.graceHours, expiresAt,
       requireApproval: spec.requireApproval,
-      teacherUrl: `${origin}/#room=${room}&admin=${adminKey}`,
+      teacherUrl: `${origin}/room#room=${room}&admin=${adminKey}`,
     }, 201);
   }
   return fail(503, ERR.ROOM_LIMIT, "could not allocate a room id");
@@ -117,10 +141,16 @@ export default {
 
     if (path === "/api/health") return json({ v: 1, ok: true, service: "egatari-live" });
 
-    // Teacher page and its static files
+    // Teacher pages and their static files
     if (request.method === "GET" || request.method === "HEAD") {
-      const res = await env.ASSETS.fetch(request);
-      return pageHeaders(res, origin);
+      const page = pageOf(path);
+      let res = await env.ASSETS.fetch(request);
+      if (page === "create" && (res.headers.get("content-type") || "").startsWith("text/html")) {
+        // The public site key reaches the page as a data attribute (no inline script under the CSP).
+        const sitekey = env.TURNSTILE_SITEKEY || "";
+        res = new HTMLRewriter().on("#turnstile", { element(e) { e.setAttribute("data-sitekey", sitekey); } }).transform(res);
+      }
+      return pageHeaders(res, origin, page);
     }
     return fail(404, ERR.NOT_FOUND);
   },

@@ -41,6 +41,12 @@ export const ERR = Object.freeze({
   BAD_REQUEST: "bad_request",
   UNAUTHORIZED: "unauthorized",
   FORBIDDEN: "forbidden",
+  // room creation
+  WINDOW_TOO_LONG: "window_too_long",
+  ROOM_TOO_LARGE: "room_too_large",
+  TURNSTILE_REQUIRED: "turnstile_required",
+  TURNSTILE_FAILED: "turnstile_failed",
+  UNAVAILABLE: "unavailable",
 });
 
 export const RE_ROOM = /^r-[a-z2-7]{8}$/;
@@ -236,7 +242,7 @@ export function checkActivities(a) {
 /** Validate the create-room request body. Returns {window, graceHours, requireApproval, activities}. */
 export function checkCreate(body, now) {
   if (!isObj(body)) throw new ProtocolError(ERR.BAD_REQUEST, "body must be a JSON object");
-  if (!only(body, ["v", "window", "graceHours", "requireApproval", "activities"])) throw new ProtocolError(ERR.BAD_REQUEST, "unexpected member");
+  if (!only(body, ["v", "window", "graceHours", "requireApproval", "activities", "size", "turnstile"])) throw new ProtocolError(ERR.BAD_REQUEST, "unexpected member");
   if (body.v !== undefined && body.v !== L.PROTOCOL_VERSION) throw new ProtocolError(ERR.UNSUPPORTED_VERSION);
   const w = body.window;
   if (!isObj(w) || !only(w, ["from", "to"]) || typeof w.from !== "string" || typeof w.to !== "string"
@@ -245,7 +251,7 @@ export function checkCreate(body, now) {
   }
   const from = Date.parse(w.from), to = Date.parse(w.to);
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new ProtocolError(ERR.BAD_REQUEST, "window.to must be after window.from");
-  if (to - from > L.MAX_WINDOW_MS) throw new ProtocolError(ERR.BAD_REQUEST, "window longer than 7 days");
+  if (to - from > L.MAX_WINDOW_MS) throw new ProtocolError(ERR.WINDOW_TOO_LONG, `a room is open for at most ${L.MAX_WINDOW_MS / 3600000} hours`);
   if (to <= now) throw new ProtocolError(ERR.BAD_REQUEST, "window already over");
   if (from - now > L.MAX_START_AHEAD_MS) throw new ProtocolError(ERR.BAD_REQUEST, "window starts more than 180 days ahead");
   let graceHours = L.DEFAULT_GRACE_HOURS;
@@ -256,6 +262,12 @@ export function checkCreate(body, now) {
     graceHours = body.graceHours;
   }
   if (body.requireApproval !== undefined && typeof body.requireApproval !== "boolean") throw new ProtocolError(ERR.BAD_REQUEST, "requireApproval must be boolean");
+  let size = null;
+  if (body.size !== undefined) {
+    if (!Number.isInteger(body.size) || body.size < 1) throw new ProtocolError(ERR.BAD_REQUEST, "size must be a positive integer");
+    if (body.size > L.MAX_ROOM_SIZE) throw new ProtocolError(ERR.ROOM_TOO_LARGE, `a room holds at most ${L.MAX_ROOM_SIZE} learners`);
+    size = body.size;
+  }
   const activities = body.activities === undefined ? null : checkActivities(body.activities);
-  return { window: { from: w.from, to: w.to }, graceHours, requireApproval: body.requireApproval === true, activities };
+  return { window: { from: w.from, to: w.to }, graceHours, requireApproval: body.requireApproval === true, activities, size };
 }

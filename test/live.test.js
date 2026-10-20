@@ -4,8 +4,10 @@ import { describe, it, expect } from "vitest";
 import * as L from "../src/limits.js";
 import { CLOSE } from "../src/protocol.js";
 import closeCodes from "../protocol/close-codes.json";
+import worker from "../src/index.js";
+import { verifyTurnstile, SITEVERIFY_URL } from "../src/turnstile.js";
 import {
-  ORIGIN, validate, createRoom, joinLearner, joinTeacher, openSocket, learnerPath, newPid, windowAround,
+  ORIGIN, DUMMY_TOKEN, createRequest, validate, createRoom, joinLearner, joinTeacher, openSocket, learnerPath, newPid, windowAround,
 } from "./helpers.js";
 
 const fixtures = import.meta.glob("../protocol/fixtures/**/*.json", { eager: true, import: "default" });
@@ -15,6 +17,7 @@ const FIXTURE_DEF = {
 };
 const defFor = (path) => {
   const rel = path.replace("../protocol/fixtures/", "").replace(/\.json$/, "");
+  if (rel.startsWith("http/error")) return "httpError";
   return FIXTURE_DEF[rel] || FIXTURE_DEF[rel.split("/")[0]];
 };
 const ok = (msg, def) => expect(validate(msg, def), JSON.stringify(msg)).toEqual([]);
@@ -63,7 +66,7 @@ describe("rooms", () => {
     expect(r.room).toMatch(/^r-[a-z2-7]{8}$/);
     expect(r.key.length).toBeGreaterThanOrEqual(22);
     expect(r.adminKey.length).toBeGreaterThanOrEqual(43);
-    expect(r.teacherUrl).toBe(`${ORIGIN}/#room=${r.room}&admin=${r.adminKey}`);
+    expect(r.teacherUrl).toBe(`${ORIGIN}/room#room=${r.room}&admin=${r.adminKey}`);
     expect(r.graceHours).toBe(24);
     const t = await joinTeacher(r);
     ok(t.state, "serverToTeacher");
@@ -84,18 +87,24 @@ describe("rooms", () => {
 
   it("validates the creation request", async () => {
     const bad = async (body, headers = {}) => {
-      const res = await SELF.fetch(ORIGIN + "/api/rooms", {
-        method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
-      });
+      const res = await SELF.fetch(createRequest(body, headers));
       const j = await res.json();
       ok(j, "httpError");
-      return res.status;
+      return [res.status, j.error];
     };
-    expect(await bad({ window: { from: "tomorrow", to: "later" } })).toBe(400);
-    expect(await bad({ window: windowAround(Date.now(), 3600_000 * 3, -3600_000) })).toBe(400); // already over
-    expect(await bad({ window: windowAround(), graceHours: 169 })).toBe(400);
-    expect(await bad({ window: windowAround(), extra: 1 })).toBe(400);
-    expect(await bad({ window: windowAround() }, { origin: "https://evil.example" })).toBe(403);
+    expect(await bad({ window: { from: "tomorrow", to: "later" } })).toEqual([400, "bad_request"]);
+    expect(await bad({ window: windowAround(Date.now(), 3600_000 * 3, -3600_000) })).toEqual([400, "bad_request"]); // already over
+    expect(await bad({ graceHours: 169 })).toEqual([400, "bad_request"]);
+    expect(await bad({ extra: 1 })).toEqual([400, "bad_request"]);
+    expect(await bad({}, { origin: "https://evil.example" })).toEqual([403, "forbidden"]);
+    // v1 caps: a 3-hour window and 60 learners
+    expect(await bad({ window: windowAround(Date.now(), 0, L.MAX_WINDOW_MS + 60_000) })).toEqual([400, "window_too_long"]);
+    expect(await bad({ size: L.MAX_ROOM_SIZE + 1 })).toEqual([400, "room_too_large"]);
+    expect(L.MAX_WINDOW_MS).toBe(3 * 3600_000);
+    expect(L.MAX_LEARNER_CONNECTIONS).toBe(60);
+    expect(L.MAX_PARTICIPANTS).toBe(200);
+    const big = await createRoom({ size: L.MAX_ROOM_SIZE, window: windowAround(Date.now(), 0, L.MAX_WINDOW_MS) });
+    expect(big.room).toMatch(/^r-/);
     const r = await createRoom({ graceHours: 168 });
     expect(r.graceHours).toBe(168);
   });
@@ -126,6 +135,74 @@ describe("rooms", () => {
     await b.next("welcome");
     expect(await a.closedWith()).toBe(CLOSE.SUPERSEDED);
     b.close();
+  });
+});
+
+describe("room creation abuse controls", () => {
+  const post = async (req, envOverride) => {
+    const res = envOverride ? await worker.fetch(req, { ...env, ...envOverride }) : await SELF.fetch(req);
+    const j = await res.json();
+    return [res.status, j.error || null, j];
+  };
+
+  it("requires a Turnstile token", async () => {
+    const [status, code, j] = await post(createRequest({ turnstile: undefined }));
+    expect([status, code]).toEqual([400, "turnstile_required"]);
+    ok(j, "httpError");
+    expect((await post(createRequest({ turnstile: "" })))[1]).toBe("turnstile_required");
+  });
+
+  it("refuses a failed token (always-fail and token-spent test secrets)", async () => {
+    const fail = await post(createRequest(), { TURNSTILE_SECRET: "2x0000000000000000000000000000000AA" });
+    expect(fail.slice(0, 2)).toEqual([403, "turnstile_failed"]);
+    ok(fail[2], "httpError");
+    const spent = await post(createRequest(), { TURNSTILE_SECRET: "3x0000000000000000000000000000000AA" });
+    expect(spent.slice(0, 2)).toEqual([403, "turnstile_failed"]);
+  });
+
+  it("accepts a passed token (always-pass test secret)", async () => {
+    const [status, , j] = await post(createRequest({ turnstile: DUMMY_TOKEN }));
+    expect(status).toBe(201);
+    ok(j, "createResponse");
+  });
+
+  it("fails closed without a secret", async () => {
+    const [status, code] = await post(createRequest(), { TURNSTILE_SECRET: undefined });
+    expect([status, code]).toEqual([503, "unavailable"]);
+  });
+
+  it("with a production secret, asks siteverify (injected fetch, no network)", async () => {
+    const calls = [];
+    const fakeFetch = (answer) => async (url, init) => {
+      calls.push({ url, form: Object.fromEntries(init.body.entries()) });
+      return new Response(JSON.stringify(answer));
+    };
+    const e = { TURNSTILE_SECRET: "placeholder-for-a-production-secret" };
+    let v = await verifyTurnstile(e, "tok", "203.0.113.9",
+      { fetchImpl: fakeFetch({ success: true, action: "create-room", hostname: "live.egatari.org" }), expectedHostname: "live.egatari.org" });
+    expect(v).toEqual({ ok: true });
+    expect(calls[0].url).toBe(SITEVERIFY_URL);
+    expect(calls[0].form).toMatchObject({ secret: e.TURNSTILE_SECRET, response: "tok", remoteip: "203.0.113.9" });
+    v = await verifyTurnstile(e, "tok", "", { fetchImpl: fakeFetch({ success: false, "error-codes": ["invalid-input-response"] }) });
+    expect(v).toMatchObject({ ok: false, status: 403, reason: "invalid-input-response" });
+    v = await verifyTurnstile(e, "tok", "", { fetchImpl: fakeFetch({ success: true, hostname: "evil.example" }), expectedHostname: "live.egatari.org" });
+    expect(v).toMatchObject({ ok: false, reason: "wrong-hostname" });
+    v = await verifyTurnstile(e, "tok", "", { fetchImpl: fakeFetch({ success: true, action: "other" }) });
+    expect(v).toMatchObject({ ok: false, reason: "wrong-action" });
+    v = await verifyTurnstile(e, "tok", "", { fetchImpl: async () => { throw new Error("offline"); } });
+    expect(v).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("limits room creation per sender (5 per minute)", async () => {
+    const ip = { "cf-connecting-ip": "192.0.2.77" };
+    const statuses = [];
+    for (let i = 0; i < 6; i++) statuses.push((await post(createRequest({}, ip)))[0]);
+    expect(statuses).toEqual([201, 201, 201, 201, 201, 429]);
+    const [, code, j] = await post(createRequest({}, ip));
+    expect(code).toBe("rate_limited");
+    ok(j, "httpError");
+    // another sender is not affected
+    expect((await post(createRequest({}, { "cf-connecting-ip": "192.0.2.78" })))[0]).toBe(201);
   });
 });
 
@@ -170,6 +247,7 @@ describe("teacher controls", () => {
     const w = await a.next("welcome");
     expect(w.status).toBe("waiting");
     ok(w, "serverToLearner");
+    expect(a.closed).toBeNull();   // pending is a "waiting" welcome on an open socket, never 4441
     a.send({ v: 1, t: "name", name: "Aiko" });
     await a.next("ack");
     a.send(ask());
@@ -437,16 +515,30 @@ describe("lifetime", () => {
 });
 
 describe("teacher page", () => {
-  it("is served with a strict CSP and no inline script", async () => {
-    const res = await SELF.fetch(ORIGIN + "/");
+  it("the room page (teacher key) has a strict CSP without third parties", async () => {
+    const res = await SELF.fetch(ORIGIN + "/room");
     expect(res.status).toBe(200);
     const csp = res.headers.get("content-security-policy");
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("script-src 'self'");
-    expect(csp).not.toContain("unsafe-inline");
-    expect(csp).toContain("connect-src 'self' wss://live.test");
-    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toBe("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://live.test; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    const html = await res.text();
+    expect(html).toContain('data-page="room"');
+    expect(html).not.toContain("turnstile");
+  });
+
+  it("the create page allows only the Turnstile widget in addition", async () => {
+    const res = await SELF.fetch(ORIGIN + "/");
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toBe("default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; connect-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    expect(csp).not.toContain("unsafe-inline");
+    const html = await res.text();
+    expect(html).toContain('id="turnstile" class="turnstile" data-sitekey=""');
+    const withKey = await worker.fetch(new Request(ORIGIN + "/"), { ...env, TURNSTILE_SITEKEY: "1x00000000000000000000AA" });
+    expect(await withKey.text()).toContain('data-sitekey="1x00000000000000000000AA"');
+  });
+
+  it("serves its files without inline script or style", async () => {
+    const res = await SELF.fetch(ORIGIN + "/");
     const html = await res.text();
     expect(html).toContain('<script src="/teacher.js" defer></script>');
     expect(html).not.toMatch(/<script>(?!<)/);
