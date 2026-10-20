@@ -34,7 +34,7 @@
       turnstileDev: "Development mode: no Turnstile site key is set, so a test token is sent.",
       turnstileWait: "Please complete the check above first.",
       err_window_too_long: "A room is open for at most 3 hours.", err_room_too_large: "A room holds at most 60 learners.",
-      err_rate_limited: "Too many rooms created from here. Try again in a minute.",
+      err_rate_limited: "Many rooms are being created from this network right now. Please wait a minute and try again.",
       err_turnstile_failed: "The check failed. Please try again.", err_turnstile_required: "Please complete the check first.",
     },
     ja: {
@@ -68,7 +68,7 @@
       turnstileDev: "開発用：Turnstile のサイトキーがないため、試験用のトークンを送ります。",
       turnstileWait: "先に上の確認を済ませてください。",
       err_window_too_long: "部屋を開けておけるのは 3 時間までです。", err_room_too_large: "1 部屋は 60 人までです。",
-      err_rate_limited: "ここから作った部屋が多すぎます。1 分ほど待ってから作ってください。",
+      err_rate_limited: "同じネットワークから、いま部屋がたくさん作られています。1 分ほど待ってから、もう一度作ってください。",
       err_turnstile_failed: "確認に失敗しました。もう一度お試しください。", err_turnstile_required: "先に確認を済ませてください。",
     },
   };
