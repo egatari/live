@@ -1,0 +1,18 @@
+{
+  "name": "egatari-live",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Egatari Live: live Q&A and polls inside a distributed Egatari lesson (Cloudflare Workers + Durable Objects)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "vitest": "4.1.11",
+    "wrangler": "4.124.0"
+  }
+}

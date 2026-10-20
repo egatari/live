@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Egatari Live: Cloudflare Workers + Durable Objects (one DO per room, WebSocket Hibernation).
+name = "egatari-live"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+# account_id = "<your Cloudflare account id>"   # fill in before `npx wrangler deploy`
+workers_dev = true
+
+# Production: a Custom Domain makes `wrangler deploy` create the DNS record and certificate itself.
+# Uncomment when deploying to live.egatari.org (the egatari.org zone must be in this account).
+# routes = [{ pattern = "live.egatari.org", custom_domain = true }]
+
+[vars]
+# Origin learners' files point at (extensions.live.endpoint). Leave empty in development to use the request origin.
+# PUBLIC_ORIGIN = "https://live.egatari.org"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true      # every response passes through the Worker, which adds the CSP
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[observability]
+enabled = false              # no request logs: room keys travel in the WebSocket URL

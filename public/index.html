@@ -1,0 +1,92 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Egatari Live</title>
+<link rel="stylesheet" href="/teacher.css">
+<script src="/teacher.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Egatari Live</h1>
+  <button type="button" id="lang" class="quiet">日本語</button>
+</header>
+<noscript><p>This page needs JavaScript. / このページには JavaScript が必要です。</p></noscript>
+
+<main>
+  <!-- Create a room -->
+  <section id="create" hidden>
+    <h2 data-i18n="createTitle"></h2>
+    <p data-i18n="createIntro"></p>
+    <form id="create-form">
+      <label><span data-i18n="from"></span> <input type="datetime-local" id="from" required></label>
+      <label><span data-i18n="to"></span> <input type="datetime-local" id="to" required></label>
+      <label><span data-i18n="grace"></span> <input type="number" id="grace" min="0" max="168" step="1" value="24"></label>
+      <label class="check"><input type="checkbox" id="approval"> <span data-i18n="requireApproval"></span></label>
+      <label class="block"><span data-i18n="activitiesOpt"></span>
+        <textarea id="activities" rows="5" spellcheck="false" placeholder='{"*":[{"id":"qa","kind":"qa"}]}'></textarea></label>
+      <button type="submit" data-i18n="createBtn"></button>
+      <p class="error" id="create-error" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- Shown once after creation -->
+  <section id="created" hidden>
+    <h2 data-i18n="createdTitle"></h2>
+    <p class="warn" data-i18n="createdWarn"></p>
+    <p><a id="teacher-link" href="#"></a></p>
+    <button type="button" id="copy-link" data-i18n="copyLink"></button>
+  </section>
+
+  <!-- Teacher dashboard -->
+  <section id="dash" hidden>
+    <div class="status">
+      <p><strong data-i18n="room"></strong> <code id="s-room"></code>
+        <span id="s-open" class="badge"></span> <span id="s-conn" class="muted"></span></p>
+      <p class="muted"><span data-i18n="window"></span> <span id="s-window"></span> ·
+        <span data-i18n="deletedAt"></span> <span id="s-expires"></span></p>
+      <p class="muted" id="s-socket"></p>
+    </div>
+
+    <div class="row">
+      <button type="button" id="btn-open" data-i18n="openBtn"></button>
+      <button type="button" id="btn-close" data-i18n="closeBtn"></button>
+      <label class="check"><input type="checkbox" id="chk-approval"> <span data-i18n="requireApproval"></span></label>
+      <button type="button" id="btn-download" data-i18n="download"></button>
+    </div>
+
+    <h3 data-i18n="forEditor"></h3>
+    <p class="muted" data-i18n="forEditorHelp"></p>
+    <textarea id="snippet" rows="6" readonly spellcheck="false"></textarea>
+    <div class="row">
+      <button type="button" id="copy-snippet" data-i18n="copySnippet"></button>
+      <button type="button" id="btn-rekey" class="danger" data-i18n="rekey"></button>
+    </div>
+    <p class="warn" id="rekeyed" hidden data-i18n="rekeyed"></p>
+
+    <h3><span data-i18n="waiting"></span> <span id="n-waiting" class="muted"></span></h3>
+    <div class="row"><button type="button" id="btn-admit-all" data-i18n="admitAll"></button></div>
+    <ul id="waiting" class="list"></ul>
+
+    <h3><span data-i18n="questions"></span> <span id="n-items" class="muted"></span></h3>
+    <label class="check"><input type="checkbox" id="chk-hidden"> <span data-i18n="showHidden"></span></label>
+    <ul id="items" class="list"></ul>
+
+    <h3 data-i18n="polls"></h3>
+    <div id="polls"></div>
+
+    <details>
+      <summary data-i18n="activities"></summary>
+      <p class="muted" data-i18n="activitiesHelp"></p>
+      <textarea id="act-edit" rows="6" spellcheck="false"></textarea>
+      <button type="button" id="btn-activities" data-i18n="setActivities"></button>
+    </details>
+    <p class="error" id="dash-error" role="alert"></p>
+  </section>
+</main>
+<footer class="muted"><span data-i18n="footer"></span></footer>
+</body>
+</html>
