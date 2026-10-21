@@ -46,7 +46,7 @@ For tests and offline development the server answers Cloudflare's documented Tur
 
 1. Open the service page (`https://live.egatari.org/`), set the window (up to 3 hours), pass the check, and create a room.
 2. **Bookmark the teacher link** that appears (`…/room#room=…&admin=…`). The teacher key in it is shown once; if it is lost, create a new room.
-3. Copy the "For the editor" snippet (endpoint, room, key, window) into the editor's export settings, and export the play-only file.
+3. Copy the "For the editor" snippet (endpoint, room, key, window) into the editor's export settings, and export the play-only file. When you hand it out, paste the **Text to share** (Copy button on the room page, in the page's language) next to the file: computers download the file and open it in a browser, phones and tablets open the join link (iPhone and iPad cannot run a downloaded HTML file; chat apps such as Slack may not preview a large file).
 4. During the lesson, keep the teacher page open: open or close the room, admit learners if approval is required, mark questions read, answered, shown or hidden, and watch poll tallies.
 5. If a learner's device cannot join from the file, send them the **Join link** (Copy button on the room page). They open it in a browser, tap **Join**, and see the Q&A, the questions you show, and all the room's polls (each labelled with where it is in the lesson, e.g. "Slide 4 'XML の壁', step 1", or its step key for activities made before labels existed, since the page has no slide position: tell them which poll to answer).
 6. If the file leaks, **Replace learner key**: everyone with the old key is disconnected; export again with the new key, and share the new join link (old join links stop working too).

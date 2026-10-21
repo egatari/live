@@ -3,7 +3,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import {
-  JoinClient, joinUrl, parseFragment, socketUrl, plan, closeInfo, viewOf, stepText, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
+  JoinClient, joinUrl, parseFragment, socketUrl, plan, closeInfo, viewOf, stepText, shareText, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
 } from "../public/join-core.js";
 import { ORIGIN, createRoom, joinTeacher, validate } from "./helpers.js";
 
@@ -175,6 +175,29 @@ describe("join page: links", () => {
     expect(after).not.toBe(before);
     expect(parseFragment(new URL(after).hash)).toEqual({ room: r.room, key: re.key });
     t.close();
+  });
+
+  it("the teacher page offers a plain-text message to share (ja/en) with the join link and a Copy button", async () => {
+    const html = await (await SELF.fetch(ORIGIN + "/room")).text();
+    expect(html).toContain('id="share-text"');
+    expect(html).toContain('id="copy-share"');
+    expect(html).toContain('data-i18n="shareTitle"');
+    const js = await (await SELF.fetch(ORIGIN + "/teacher.js")).text();
+    expect(js).toContain("配るときの文");
+    expect(js).toContain("Text to share");
+    expect(js).toContain('$("share-text").value = shareText(lang, jl)');
+    expect(js).toContain('copy($("share-text").value)');
+    const link = joinUrl(ORIGIN, ROOM, KEY);
+    for (const lang of ["ja", "en"]) {
+      const s = shareText(lang, link);
+      expect(s.split("\n")).toContain(link);                 // the link on a line of its own (chat apps link it)
+      expect(s).not.toMatch(/[<>]/);                           // plain text, no markup
+      expect(s).toMatch(/Slack/);
+    }
+    expect(shareText("ja", link)).toMatch(/パソコン：添付のファイルをダウンロードして、ブラウザ/);
+    expect(shareText("ja", link)).toMatch(/スマートフォン・タブレット：次のリンク/);
+    expect(shareText("en", link)).toMatch(/computer: download the attached file and open it in a browser/);
+    expect(shareText("en", link)).toMatch(/phone or tablet: open this link/);
   });
 });
 

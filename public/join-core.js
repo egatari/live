@@ -26,6 +26,29 @@ export function joinUrl(origin, room, key) {
   return `${origin}/join#room=${encodeURIComponent(room)}&key=${encodeURIComponent(key)}`;
 }
 
+/**
+ * "Text to share": a ready-to-paste plain-text message for handing out the lesson with its live room.
+ * Computers open the attached file; phones and tablets open the join link (iOS cannot run a downloaded HTML file).
+ */
+export function shareText(lang, link) {
+  if (lang === "ja") {
+    return [
+      "授業の部屋（質問と投票）への参加のしかた",
+      "・パソコン：添付のファイルをダウンロードして、ブラウザ（Chrome・Edge・Safari など）で開いてください。",
+      "・スマートフォン・タブレット：次のリンクを開いてください。",
+      link,
+      "※ Slack などでは、大きなファイルはプレビューが出ないことがあります。そのときはダウンロードしてから開いてください。",
+    ].join("\n");
+  }
+  return [
+    "How to join the live room (questions and polls)",
+    "- On a computer: download the attached file and open it in a browser (Chrome, Edge, Safari, ...).",
+    "- On a phone or tablet: open this link:",
+    link,
+    "Note: Slack and other apps may not preview large files. If there is no preview, download the file and then open it.",
+  ].join("\n");
+}
+
 /** Read {room, key} from a location.hash ("#room=…&key=…"); null if either is missing or malformed. */
 export function parseFragment(hash) {
   const q = new URLSearchParams(String(hash || "").replace(/^#/, ""));
