@@ -13,7 +13,7 @@ const T = {
     retrying: (s) => `${s} 秒後につなぎ直します`, left: "切断しました。もう一度参加できます",
     name: "名前（任意）", nameNote: "名前は先生だけに見えます（入れなければ名前なしで送られます）。", ask: "先生への質問", send: "送る", sent: "質問を送りました",
     shown: "先生が全員に表示した質問", polls: "投票", pollsNote: "このライブの投票がすべて並んでいます。先生が指示した投票に答えてください。",
-    step: "ステップ", vote: "投票する", voted: "投票しました（選び直せます）",
+    stepPrefix: "場所：", vote: "投票する", voted: "投票しました（選び直せます）",
     privacy: "送るのは、送ると決めた質問と投票（と入れたときの名前）、この端末で作った番号だけです。",
     footer: "Egatari Live（Egatari Studio の一部）。アカウントも利用状況の記録もありません。",
     stop: {
@@ -40,7 +40,7 @@ const T = {
     retrying: (s) => `Reconnecting in ${s} s`, left: "Disconnected. You can join again",
     name: "Name (optional)", nameNote: "Only the teacher sees your name (leave it empty to send without one).", ask: "Question for the teacher", send: "Send", sent: "Question sent",
     shown: "Questions the teacher showed to everyone", polls: "Polls", pollsNote: "All polls in this Live. Answer the one your teacher asks for.",
-    step: "Step", vote: "Vote", voted: "Vote recorded (you can change it)",
+    stepPrefix: "Where: ", vote: "Vote", voted: "Vote recorded (you can change it)",
     privacy: "Only what you choose to send (questions, votes, and a name if you type one) and a random id made on this device are sent.",
     footer: "Egatari Live, part of Egatari Studio. No accounts, no telemetry.",
     stop: {
@@ -124,7 +124,7 @@ function renderPolls(polls, votes) {
     box.replaceChildren(...polls.map((p) => {
       const fs = h("fieldset"); fs.dataset.poll = p.id;
       fs.append(h("legend", "", p.prompt || p.id));
-      const st = h("span", "step", `${t("step")}: ${stepText(p.step, p.label, lang)}`);
+      const st = h("span", "step", `${t("stepPrefix")}${stepText(p.step, p.label, lang)}`);
       st.title = p.step;   // the key itself, for the teacher's eye
       fs.append(st);
       p.choices.forEach((c, j) => {

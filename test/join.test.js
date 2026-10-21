@@ -486,7 +486,8 @@ describe("activity labels on the join and teacher pages", () => {
   });
   it("both pages render the step with stepText as text (textContent), with the key in a title tooltip", async () => {
     const join = await (await SELF.fetch(ORIGIN + "/join.js")).text();
-    expect(join).toContain('h("span", "step", `${t("step")}: ${stepText(p.step, p.label, lang)}`)');
+    expect(join).toContain('h("span", "step", `${t("stepPrefix")}${stepText(p.step, p.label, lang)}`)');
+    expect(join).toContain('stepPrefix: "場所："');   // the label already says ステップ: no 「ステップ: …ステップ 1」
     expect(join).toContain("st.title = p.step;");
     expect(join).not.toMatch(/innerHTML|insertAdjacentHTML/);
     const teacher = await (await SELF.fetch(ORIGIN + "/teacher.js")).text();
