@@ -555,7 +555,7 @@ describe("teacher page", () => {
 });
 
 describe("activity labels (display text for a step)", () => {
-  const LABEL = "4 枚目『XML の壁』・段階 1";
+  const LABEL = "4 枚目『XML の壁』・ステップ 1";
   const labelled = {
     "*": [{ id: "qa", kind: "qa", label: "教材全体" }],
     "s-cjatth:0": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"], label: LABEL }],

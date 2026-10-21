@@ -33,7 +33,7 @@ export function joinUrl(origin, room, key) {
 export function shareText(lang, link) {
   if (lang === "ja") {
     return [
-      "授業の部屋（質問と投票）への参加のしかた",
+      "ライブ（質問と投票）への参加のしかた",
       "・パソコン：添付のファイルをダウンロードして、ブラウザ（Chrome・Edge・Safari など）で開いてください。",
       "・スマートフォン・タブレット：次のリンクを開いてください。",
       link,
@@ -41,7 +41,7 @@ export function shareText(lang, link) {
     ].join("\n");
   }
   return [
-    "How to join the live room (questions and polls)",
+    "How to join the Live (questions and polls)",
     "- On a computer: download the attached file and open it in a browser (Chrome, Edge, Safari, ...).",
     "- On a phone or tablet: open this link:",
     link,
@@ -144,12 +144,12 @@ export function newPid(cryptoObj = globalThis.crypto) {
 
 // ------------------------------------------------------------------ activities as the page shows them
 
-const STEP_WORDS = { ja: { whole: "教材全体", step: "段階" }, en: { whole: "whole lesson", step: "step" } };
+const STEP_WORDS = { ja: { whole: "教材全体", step: "ステップ" }, en: { whole: "whole lesson", step: "step" } };
 
 /**
  * The text shown for an activity's step: its `label` (display text the editor wrote, e.g.
- * 「4 枚目『XML の壁』・段階 1」) if it has one; "*" is the whole lesson; otherwise the key itself,
- * as "s-xxx · 段階 1" when it reads as "<slide>:<k>" with a number k (0-based in the key, 1-based here).
+ * 「4 枚目『XML の壁』・ステップ 1」) if it has one; "*" is the whole lesson; otherwise the key itself,
+ * as "s-xxx · ステップ 1" when it reads as "<slide>:<k>" with a number k (0-based in the key, 1-based here).
  * Only ever shown with textContent.
  */
 export function stepText(step, label, lang = "ja") {

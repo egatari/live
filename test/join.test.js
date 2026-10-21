@@ -128,7 +128,7 @@ describe("join page: served", () => {
     const js = await (await SELF.fetch(ORIGIN + "/join.js")).text();
     expect(js).toContain('from "/join-core.js"');
     expect(js).toContain("parseFragment(location.hash)");
-    expect(js).toContain("この教材は ${HOST} の授業の部屋につながります");
+    expect(js).toContain("この教材から、${HOST} のライブで先生に質問や投票を送れます");
   });
 });
 
@@ -162,7 +162,7 @@ describe("join page: links", () => {
     expect(js).toContain('import { joinUrl, stepText } from "/join-core.js"');
     expect(js).toContain("joinUrl(location.origin, st.room, st.key)");
     expect(js).toMatch(/case "rekeyed":[^\n]*\$\("join-rekeyed"\)\.hidden = false[^\n]*renderStatus\(\)/);
-    expect(js).toContain("参加用のリンク");
+    expect(js).toContain("参加用リンク");
     // what the teacher page renders, for a real room before and after rekey
     const r = await createRoom();
     const t = await joinTeacher(r);
@@ -467,22 +467,22 @@ describe("join page: against a live room", () => {
 
 describe("activity labels on the join and teacher pages", () => {
   it("stepText shows the label; without one, * is the whole lesson and <slide>:<k> is 'slide · step k+1'", () => {
-    expect(stepText("s-cjatth:0", "4 枚目『XML の壁』・段階 1", "ja")).toBe("4 枚目『XML の壁』・段階 1");
+    expect(stepText("s-cjatth:0", "4 枚目『XML の壁』・ステップ 1", "ja")).toBe("4 枚目『XML の壁』・ステップ 1");
     expect(stepText("s-cjatth:0", "Slide 4 'XML の壁', step 1", "en")).toBe("Slide 4 'XML の壁', step 1");
-    expect(stepText("s-cjatth:0", undefined, "ja")).toBe("s-cjatth · 段階 1");
+    expect(stepText("s-cjatth:0", undefined, "ja")).toBe("s-cjatth · ステップ 1");
     expect(stepText("s-cjatth:0", "", "en")).toBe("s-cjatth · step 1");
-    expect(stepText("s-cjatth:concl", null, "ja")).toBe("s-cjatth · 段階 concl");
+    expect(stepText("s-cjatth:concl", null, "ja")).toBe("s-cjatth · ステップ concl");
     expect(stepText("*", undefined, "ja")).toBe("教材全体");
     expect(stepText("*", undefined, "en")).toBe("whole lesson");
     expect(stepText("a:b:2", undefined, "en")).toBe("a:b · step 3");
   });
   it("viewOf passes each poll's label through; older polls without one have none", () => {
     const v = viewOf({
-      "s-cjatth:0": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"], label: "4 枚目『XML の壁』・段階 1" }],
+      "s-cjatth:0": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"], label: "4 枚目『XML の壁』・ステップ 1" }],
       "s-old:1": [{ id: "p2", kind: "poll", prompt: "Old?", choices: ["a", "b"] }],
     }, true);
-    expect(v.polls.map((p) => [p.id, p.label])).toEqual([["p1", "4 枚目『XML の壁』・段階 1"], ["p2", undefined]]);
-    expect(v.polls.map((p) => stepText(p.step, p.label, "ja"))).toEqual(["4 枚目『XML の壁』・段階 1", "s-old · 段階 2"]);
+    expect(v.polls.map((p) => [p.id, p.label])).toEqual([["p1", "4 枚目『XML の壁』・ステップ 1"], ["p2", undefined]]);
+    expect(v.polls.map((p) => stepText(p.step, p.label, "ja"))).toEqual(["4 枚目『XML の壁』・ステップ 1", "s-old · ステップ 2"]);
   });
   it("both pages render the step with stepText as text (textContent), with the key in a title tooltip", async () => {
     const join = await (await SELF.fetch(ORIGIN + "/join.js")).text();

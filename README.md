@@ -3,9 +3,9 @@
 Part of Egatari Studio; the reference implementation behind live.egatari.org.
 （Egatari Studio の一部。live.egatari.org を動かす参照実装です。）
 
-Egatari Live lets learners ask questions and answer polls from inside a distributed Egatari lesson, without scanning a code or opening another app. The teacher creates a room on this service's page, pastes the room and its learner key into the editor's export settings, and hands out the play-only file. While the room's time window is open, a player that implements the `live` extension shows a **Join** button; after one tap the lesson connects to the room.
+Egatari Live lets participants ask questions and answer polls from inside a distributed Egatari lesson, without scanning a code or opening another app. The teacher creates a Live on this service's page, pastes its settings (Live ID, join code, live time) into Egatari Studio (**Export ▾ → Distribute with Live (questions and polls)…**), and hands out the Egatari file (play only). During the live time, a player that implements the `live` extension shows a **Join** button; after one tap the lesson joins the Live. (In the protocol and the code a Live is a *room*, and the join code is the learner *key*.)
 
-For devices that cannot connect from the file (a lesson opened inside a chat app's browser such as Slack on iPhone, a file viewer that runs no scripts such as iOS Files), the teacher page also gives a **join link**, `https://live.egatari.org/join#room=…&key=…`, that learners open in a browser. The room and key are only in the fragment, so they never reach the server or its logs; the page speaks the same learner protocol with the same data rules (PROTOCOL.md §7.1).
+For devices that cannot connect from the file (a lesson opened inside a chat app's browser such as Slack on iPhone, a file viewer that runs no scripts such as iOS Files), the teacher page also gives a **join link**, `https://live.egatari.org/join#room=…&key=…`, that participants open in a browser. The Live ID and join code are only in the fragment, so they never reach the server or its logs; the page speaks the same learner protocol with the same data rules (PROTOCOL.md §7.1).
 
 It runs on Cloudflare Workers with one Durable Object per room, using the WebSocket Hibernation API so that idle rooms cost nothing. There is no database outside the rooms, no R2, no accounts and no cookies.
 
@@ -26,7 +26,7 @@ It runs on Cloudflare Workers with one Durable Object per room, using the WebSoc
 
 **How long:** a room and everything in it is deleted by a Durable Object alarm at the end of its window plus the grace period (24 hours by default, at most 7 days), so that the teacher can download the results. After that there is nothing left to recover. Learners are disconnected when the window ends.
 
-**Who sees what:** questions are visible to the teacher only, unless the teacher shows (projects) one; shown questions reach learners without any name or participant id. Results belong to the teacher and are downloaded as JSON from the teacher page.
+**Who sees what:** questions are visible to the teacher only, unless the teacher marks one **show to everyone**; shown questions reach participants without any name or participant id. Results belong to the teacher and are downloaded as JSON from the teacher page.
 
 ## Room size in v1
 
@@ -44,13 +44,13 @@ For tests and offline development the server answers Cloudflare's documented Tur
 
 ## Using it
 
-1. Open the service page (`https://live.egatari.org/`), set the window (up to 3 hours), pass the check, and create a room.
-2. **Bookmark the teacher link** that appears (`…/room#room=…&admin=…`). The teacher key in it is shown once; if it is lost, create a new room.
-3. Copy the "For the editor" snippet (endpoint, room, key, window) into the editor's export settings, and export the play-only file. When you hand it out, paste the **Text to share** (Copy button on the room page, in the page's language) next to the file: computers download the file and open it in a browser, phones and tablets open the join link (iPhone and iPad cannot run a downloaded HTML file; chat apps such as Slack may not preview a large file).
-4. During the lesson, keep the teacher page open: open or close the room, admit learners if approval is required, mark questions read, answered, shown or hidden, and watch poll tallies.
-5. If a learner's device cannot join from the file, send them the **Join link** (Copy button on the room page). They open it in a browser, tap **Join**, and see the Q&A, the questions you show, and all the room's polls (each labelled with where it is in the lesson, e.g. "Slide 4 'XML の壁', step 1", or its step key for activities made before labels existed, since the page has no slide position: tell them which poll to answer).
-6. If the file leaks, **Replace learner key**: everyone with the old key is disconnected; export again with the new key, and share the new join link (old join links stop working too).
-7. After the lesson, **Download results (JSON)** before the grace period ends.
+1. Open the service page (`https://live.egatari.org/`), set the live time (start and end, up to 3 hours), choose **Use a waiting room** if only people you admit may join, pass the check, and **Create Live**.
+2. **Bookmark the teacher link** that appears (`…/room#room=…&admin=…`). It is shown once; if it is lost, create a new Live.
+3. Copy **Settings to paste into Egatari Studio** (server, Live ID, join code, live time) into Egatari Studio's **Distribute with Live (questions and polls)…**, and export the Egatari file (play only). When you hand it out, paste the **Text to share** (Copy button on the room page, in the page's language) next to the file: computers download the file and open it in a browser, phones and tablets open the join link (iPhone and iPad cannot run a downloaded HTML file; chat apps such as Slack may not preview a large file).
+4. During the lesson, keep the teacher page open: **End Live** or **Reopen Live**, admit participants from the waiting room (**Admit**, **Decline**, **Admit all**), mark questions read, answered, show to everyone or hidden, and watch poll tallies.
+5. If a participant's device cannot join from the file, send them the **Join link** (Copy button on the teacher page). They open it in a browser, tap **Join**, and see the question box, the questions you show to everyone, and all the Live's polls (each labelled with where it is in the lesson, e.g. "Slide 4 'XML の壁', step 1", or its step key for activities made before labels existed, since the page has no slide position: tell them which poll to answer).
+6. If the file leaks, **Change join code**: everyone who joined with the old code is disconnected; export again with the new code, and share the new join link (old join links stop working too).
+7. After the lesson, **Download results (JSON)** before the time to keep results ends.
 
 ## Development
 
@@ -103,9 +103,9 @@ The service (everything outside `protocol/`) is licensed under the **GNU Affero 
 
 **Egatari Studio の一部。live.egatari.org を動かす参照実装です。**
 
-Egatari Live は、配った Egatari の教材の中から、学ぶ人が質問し、投票に答えられるようにするサービスです。QR コードを読んだり別のアプリを開いたりする必要はありません。教員はこのサービスのページで部屋を作り、部屋と参加の鍵を編集アプリの書き出しの設定に貼って、再生専用のファイルを配ります。部屋の時間の窓のあいだ、`live` 拡張に対応した再生アプリは「参加する」のボタンを出し、1 回押すと授業の部屋につながります。
+Egatari Live は、配った Egatari の教材の中から、参加者が質問し、投票に答えられるようにするサービスです。QR コードを読んだり別のアプリを開いたりする必要はありません。教員はこのサービスのページでライブを作り、その設定（ライブ ID・参加コード・ライブの時間）を Egatari Studio の **書き出す ▾ →「ライブ（質問・投票）を付けて配る…」** に貼って、Egatari ファイル（再生のみ）を配ります。ライブの時間のあいだ、`live` 拡張に対応した再生アプリは「参加する」のボタンを出し、1 回押すとライブにつながります（通信の約束とコードでは、ライブは room、参加コードは学ぶ人の key と呼びます）。
 
-教材のファイルからつながらない端末（Slack などチャットのアプリの中のブラウザで開いたとき、iOS の「ファイル」のようにスクリプトを動かさないアプリ）のために、教員のページは**参加用のリンク** `https://live.egatari.org/join#room=…&key=…` も出します。学ぶ人はこれをブラウザで開きます。部屋と鍵は `#` の後ろにだけあるので、サーバーにもログにも届きません。通信の約束と送るものの決まりは再生アプリと同じです（PROTOCOL.md §7.1）。
+教材のファイルからつながらない端末（Slack などチャットのアプリの中のブラウザで開いたとき、iOS の「ファイル」のようにスクリプトを動かさないアプリ）のために、教員用ページは**参加用リンク** `https://live.egatari.org/join#room=…&key=…` も出します。参加者はこれをブラウザで開きます。ライブ ID と参加コードは `#` の後ろにだけあるので、サーバーにもログにも届きません。通信の約束と送るものの決まりは再生アプリと同じです（PROTOCOL.md §7.1）。
 
 Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、WebSocket Hibernation で待ち時間には課金されません。部屋の外のデータベース、R2、アカウント、Cookie はありません。
 
@@ -115,17 +115,17 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 - **教員が部屋を作るとき**：送り手の IP アドレスを、作成の回数の上限（Cloudflare の Rate Limiting がメモリ上で 1 分数えるだけで、このサービスは保存しない）と、Cloudflare Turnstile の確認に使います。Turnstile を読み込むのは部屋を作るページだけです。
 - **保存も送信もしないもの**：IP アドレスの保存、ブラウザの情報、視聴の位置や時間・再生の操作、そのほかの利用状況の記録は一切ありません。リクエストのログも切ってあります。
 - **期間**：部屋とその中身は、時間の窓の終わりから猶予の時間（既定 24 時間、最大 7 日）が過ぎると、Durable Object の alarm で消えます。消えた後は取り戻せません。窓が終わると学ぶ人の接続は切れます。
-- **見える人**：質問は教員だけが見ます。教員が「映す」にした質問だけが、名前も id も付けずに学ぶ人に届きます。結果は教員のもので、教員のページから JSON でダウンロードします。
+- **見える人**：質問は教員だけが見ます。教員が「全員に表示」にした質問だけが、名前も id も付けずに参加者に届きます。結果は教員のもので、教員用ページから JSON でダウンロードします。
 
 ### 使い方
 
-1. サービスのページで時間の窓を決めて、部屋を作る。
-2. 表示される教員のリンク（`…/room#room=…&admin=…`）を**すぐブックマークする**。教員の鍵は一度しか表示されず、なくしたら部屋を作り直す。
-3. 「編集アプリに貼る」の内容（行き先・部屋・鍵・時間の窓）を書き出しの設定に貼り、再生専用のファイルを書き出す。
-4. 授業中は教員のページを開いておく：部屋を開ける・閉じる、承認、質問の「読んだ・答えた・映す・隠す」、投票の集計。
-5. 教材のファイルから参加できない端末の人には「参加用のリンク」を送る（部屋のページのコピーのボタン）。ブラウザで開いて「参加する」を押すと、質問の欄、映した質問、部屋のすべての投票が出る（このページには今のスライドがないので、投票には教材のどこか（例「4 枚目『XML の壁』・段階 1」。表示名のない古い活動では段階の鍵）を添えて全部出す。どれに答えるかは口で伝える）。
-6. ファイルが外に出たら「参加の鍵を替える」。古い鍵の人は切断されるので、新しい鍵で書き出し直し、新しい参加用のリンクを配る（古いリンクも使えなくなる）。
-7. 授業の後、猶予が終わる前に「結果をダウンロード（JSON）」。
+1. サービスのページでライブの時間（開始と終了。3 時間まで）を決め、先生が許可した人だけにするなら「待機室を使う」をオンにし、確認を済ませて「ライブを作る」。
+2. 表示される教員用リンク（`…/room#room=…&admin=…`）を**すぐブックマークする**。一度しか表示されず、なくしたらライブを作り直す。
+3. 「Egatari Studio に貼る設定」（接続先・ライブ ID・参加コード・ライブの時間）を Egatari Studio の「ライブ（質問・投票）を付けて配る…」に貼り、Egatari ファイル（再生のみ）を書き出す。
+4. 授業中は教員用ページを開いておく：「ライブを終える」「ライブを再開」、待機室の「許可」「許可しない」「全員を許可」、質問の「既読・回答済み・全員に表示・非表示」、投票の集計。
+5. 教材ファイルから参加できない端末の人には「参加用リンク」を送る（教員用ページのコピーのボタン）。ブラウザで開いて「参加する」を押すと、質問の欄、全員に表示した質問、このライブのすべての投票が出る（このページには今のスライドがないので、投票には教材のどこか（例「4 枚目『XML の壁』・ステップ 1」。表示名のない古い投票ではステップの鍵）を添えて全部出す。どれに答えるかは口で伝える）。
+6. ファイルが外に出たら「参加コードを変更」。古い参加コードで参加していた人は切断されるので、新しい参加コードで書き出し直し、新しい参加用リンクを配る（古いリンクも使えなくなる）。
+7. 授業の後、結果を残す時間が終わる前に「結果をダウンロード（JSON）」。
 
 ### v1 の部屋の大きさと悪用の対策
 
