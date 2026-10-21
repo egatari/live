@@ -67,8 +67,8 @@ Deploying is done by hand after the end-to-end tests with Studio pass.
 2. **Turnstile widget.** In the Cloudflare dashboard → Turnstile → Add widget: name "Egatari Live", hostname `live.egatari.org` (add `localhost` too if you want to try the real widget with `wrangler dev`), mode "Managed". Copy the site key and the secret key.
    - Put the site key in `wrangler.toml`: `TURNSTILE_SITEKEY = "<site key>"` (it is public).
    - Store the secret as a Worker secret (it is never written to the repo): `npx wrangler secret put TURNSTILE_SECRET` and paste the secret key.
-3. In `wrangler.toml`, set `account_id`, uncomment `routes = [{ pattern = "live.egatari.org", custom_domain = true }]` and `PUBLIC_ORIGIN = "https://live.egatari.org"`. The zone `egatari.org` must be in the same Cloudflare account. With `custom_domain = true`, `wrangler deploy` creates the DNS record and the certificate itself; no manual DNS entry is needed. (Alternatively add the Custom Domain in the dashboard: Workers & Pages → egatari-live → Settings → Domains & Routes.)
-4. `npm ci && npm test && npx wrangler deploy` (Workers paid plan; Durable Objects use the SQLite backend via the `v1` migration).
+3. Production settings live in `wrangler.production.toml` (a copy of `wrangler.toml` with the `live.egatari.org` route as a Custom Domain, `PUBLIC_ORIGIN` and the Turnstile site key; `wrangler.toml` stays the development and test config). The zone `egatari.org` must be in the same Cloudflare account. With `custom_domain = true`, `wrangler deploy` creates the DNS record and the certificate itself; no manual DNS entry is needed. The account id is passed at deploy time, not committed.
+4. `npm ci && npm test && CLOUDFLARE_ACCOUNT_ID=<account id> npx wrangler deploy -c wrangler.production.toml` (Workers paid plan; Durable Objects use the SQLite backend via the `v1` migration).
 5. Check:
 
    ```sh
@@ -125,7 +125,7 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 
 ### 開発とデプロイ
 
-`npm ci` のあと `npm test` で、手元だけで試験が通ります（Miniflare / workerd）。デプロイは Studio との通しの試験が通った後に手で行います（上の英語の「Deploy」の手順）。Cloudflare のダッシュボードで Turnstile のウィジェットを作り（ホスト名 live.egatari.org、試すなら localhost も）、サイトキーを `wrangler.toml` に入れ、秘密の鍵は `npx wrangler secret put TURNSTILE_SECRET` で入れます。`wrangler.toml` の `account_id` を入れ、`routes`（`custom_domain = true`）と `PUBLIC_ORIGIN` の行を有効にして `npx wrangler deploy` すると、DNS の記録と証明書は自動で作られます。
+`npm ci` のあと `npm test` で、手元だけで試験が通ります（Miniflare / workerd）。デプロイは Studio との通しの試験が通った後に手で行います（上の英語の「Deploy」の手順）。Cloudflare のダッシュボードで Turnstile のウィジェットを作り（ホスト名 live.egatari.org、試すなら localhost も）、秘密の鍵は `npx wrangler secret put TURNSTILE_SECRET` で入れます（会話のできるターミナルで）。本番の設定は `wrangler.production.toml`（`routes` の custom domain・`PUBLIC_ORIGIN`・サイトキー入り。`wrangler.toml` は開発と試験用のまま）で、`CLOUDFLARE_ACCOUNT_ID=<アカウントの ID> npx wrangler deploy -c wrangler.production.toml` とすると、DNS の記録と証明書は自動で作られます。アカウントの ID はリポジトリに入れません。
 
 ### ライセンス
 

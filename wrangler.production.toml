@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Egatari Live: Cloudflare Workers + Durable Objects (one DO per room, WebSocket Hibernation).
+# Production config for live.egatari.org: `CLOUDFLARE_ACCOUNT_ID=… npx wrangler deploy -c wrangler.production.toml`.
+# Keep it in step with wrangler.toml (the development and test config).
+name = "egatari-live"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+# account_id = "<your Cloudflare account id>"   # fill in before `npx wrangler deploy`
+workers_dev = false
+
+# Production: a Custom Domain makes `wrangler deploy` create the DNS record and certificate itself.
+# Uncomment when deploying to live.egatari.org (the egatari.org zone must be in this account).
+routes = [{ pattern = "live.egatari.org", custom_domain = true }]
+
+[vars]
+# Origin learners' files point at (extensions.live.endpoint). Leave empty in development to use the request origin.
+PUBLIC_ORIGIN = "https://live.egatari.org"
+# Turnstile site key (public) of the widget for live.egatari.org, from the Cloudflare dashboard.
+# Empty = no widget: the create page sends Cloudflare's dummy test token, which only a test secret accepts
+# (offline development). The secret is never here: `npx wrangler secret put TURNSTILE_SECRET`
+# (for local development put a test secret in .dev.vars, see .dev.vars.example).
+TURNSTILE_SITEKEY = "0x4AAAAAAFeblX_9omP-BmPt"
+
+# Per-sender limit on POST /api/rooms (keyed by CF-Connecting-IP): 5 rooms per 60 s.
+# namespace_id is any integer unique to this limiter within the account.
+[[ratelimits]]
+name = "CREATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true      # every response passes through the Worker, which adds the CSP
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[observability]
+enabled = false              # no request logs: room keys travel in the WebSocket URL
