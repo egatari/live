@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Egatari Live</title>
+<link rel="stylesheet" href="/join.css">
+<script type="module" src="/join.js"></script>
+</head>
+<body data-page="join">
+<header class="top">
+  <h1>Egatari Live</h1>
+  <button type="button" id="lang" class="quiet small">English</button>
+</header>
+<noscript><p>このページには JavaScript が必要です。 / This page needs JavaScript.</p></noscript>
+
+<div id="bar" class="bar" data-state="idle" hidden>
+  <span class="dot" aria-hidden="true"></span>
+  <span id="bar-text" class="bar-text"></span>
+  <button type="button" id="leave" class="quiet small" data-i18n="leave"></button>
+</div>
+
+<main>
+  <p id="bad-link" class="card warn" hidden data-i18n="badLink"></p>
+
+  <section id="intro" class="card" hidden>
+    <p id="notice" class="notice"></p>
+    <p class="muted"><span data-i18n="roomLabel"></span> <code id="room-id"></code></p>
+    <button type="button" id="join" class="primary" data-i18n="join"></button>
+    <p id="stop-msg" class="msg" role="alert"></p>
+    <p class="muted small-text" data-i18n="privacy"></p>
+  </section>
+
+  <section id="live" hidden>
+    <p id="wait-msg" class="card waiting" hidden data-i18n="waitingLong"></p>
+
+    <div class="card">
+      <label for="name" data-i18n="name"></label>
+      <input type="text" id="name" maxlength="40" autocomplete="off">
+      <p class="muted small-text" data-i18n="nameNote"></p>
+    </div>
+
+    <div id="qa" class="card" hidden>
+      <label for="question" data-i18n="ask"></label>
+      <textarea id="question" rows="3" maxlength="500"></textarea>
+      <div class="row">
+        <button type="button" id="send" class="primary" data-i18n="send"></button>
+        <span id="qa-note" class="muted small-text"></span>
+      </div>
+    </div>
+
+    <div id="shown-box" class="card" hidden>
+      <h2 data-i18n="shown"></h2>
+      <ul id="shown" class="shown"></ul>
+    </div>
+
+    <div id="polls-box" hidden>
+      <h2 class="section" data-i18n="polls"></h2>
+      <p class="muted small-text" data-i18n="pollsNote"></p>
+      <div id="polls"></div>
+    </div>
+
+    <p id="live-msg" class="msg" role="alert"></p>
+    <p class="muted small-text" data-i18n="privacy"></p>
+  </section>
+  <div id="sr" class="sr-only" role="status" aria-live="polite"></div>
+</main>
+<footer class="muted small-text"><span data-i18n="footer"></span></footer>
+</body>
+</html>

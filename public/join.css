@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Egatari Live learner join page. Mobile first: works from 320 px wide. */
+:root {
+  --bg: #fbfaf7; --fg: #1d1c22; --muted: #6b6a73; --line: #dddbe3; --accent: #4a488e; --danger: #d3381c;
+  --card: #ffffff; --warn-bg: #fff4e5; --ok: #2e8b57; --wait: #b8860b;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17161c; --fg: #ecebf2; --muted: #9a99a5; --line: #34333d; --accent: #a9a7f0; --danger: #ff7a5c;
+    --card: #201f27; --warn-bg: #3a2c16; --ok: #5fd08f; --wait: #e0b341; }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; overflow-wrap: anywhere; }
+.top, main, footer { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; }
+h1 { font-size: 1.25rem; color: var(--accent); margin: 0.3em 0; }
+h2 { font-size: 1rem; margin: 0 0 0.4em; }
+h2.section { margin-top: 1.2em; }
+footer { padding-top: 20px; padding-bottom: 24px; }
+.muted { color: var(--muted); }
+.small-text { font-size: 0.85rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
+.warn { background: var(--warn-bg); }
+.waiting { border-color: var(--wait); }
+.notice { font-weight: 600; margin-top: 0; }
+.msg { color: var(--danger); min-height: 0; margin: 0.4em 0; }
+.msg:empty { display: none; }
+code { font-family: ui-monospace, Menlo, monospace; }
+label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
+input[type="text"], textarea { width: 100%; font: inherit; color: inherit; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+textarea { min-height: 5.5em; resize: vertical; }
+button { font: inherit; min-height: 44px; padding: 0.4em 1em; border-radius: 8px; border: 1px solid var(--accent);
+  background: transparent; color: var(--accent); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--bg); font-weight: 600; }
+button.small { min-height: 36px; padding: 0.2em 0.8em; font-size: 0.9rem; }
+button.quiet { border-color: var(--line); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#join { width: 100%; font-size: 1.1rem; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+[hidden] { display: none !important; }
+
+/* The persistent connection indicator */
+.bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+  max-width: 640px; margin: 0 auto; padding: 6px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.bar .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.bar[data-state="connected"] .dot { background: var(--ok); }
+.bar[data-state="waiting"] .dot, .bar[data-state="connecting"] .dot, .bar[data-state="retrying"] .dot { background: var(--wait); }
+.bar[data-state="stopped"] .dot { background: var(--danger); }
+.bar-text { flex: 1; min-width: 0; font-size: 0.9rem; }
+
+/* Polls */
+fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 12px 0; padding: 8px 14px 12px; background: var(--card); min-width: 0; }
+legend { font-weight: 600; padding: 0 4px; }
+.step { display: block; font-size: 0.8rem; color: var(--muted); margin: 0 0 4px; font-family: ui-monospace, Menlo, monospace; }
+.choice { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; font-size: 1rem; padding: 8px 0; margin: 0; cursor: pointer; }
+.choice input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+.voted { color: var(--ok); }
+
+/* Questions shown by the teacher */
+.shown { margin: 0; padding-left: 1.2em; }
+.shown li { margin: 4px 0; white-space: pre-wrap; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: no-preference) { .bar .dot { transition: background-color 0.2s; } }

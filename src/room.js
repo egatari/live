@@ -114,6 +114,12 @@ export class Room extends DurableObject {
     };
   }
 
+  /** The learner-side view of the activities (the join page asks for it; the lesson file already has it). */
+  activitiesMessage() {
+    const m = this.meta;
+    return { t: "activities", activities: m.activities || this.inferredActivities(), declared: !!m.activities };
+  }
+
   inferredActivities() {
     const out = {};
     for (const [id, s] of Object.entries(this.meta.seen || {})) {
@@ -304,6 +310,12 @@ export class Room extends DurableObject {
     }
     if (a.status !== "admitted") return fail(ERR.NOT_ADMITTED);
 
+    if (m.t === "activities") {
+      // Remember that this socket wants updates when the teacher changes the activities.
+      if (!a.acts) { a.acts = true; ws.serializeAttachment(a); }
+      return reply(this.activitiesMessage());
+    }
+
     const kind = m.t === "ask" ? "qa" : "poll";
     const known = this.findActivity(m.activity);
     if (this.meta.activities) {
@@ -422,6 +434,10 @@ export class Room extends DurableObject {
         await this.saveMeta();
         this.tallies = null;
         reply({ t: "ack" });
+        for (const l of this.learners()) {
+          const la = l.deserializeAttachment();
+          if (la?.acts && la.status === "admitted") this.send(l, this.activitiesMessage());
+        }
         return this.toTeachers(await this.stateMessage());
     }
   }

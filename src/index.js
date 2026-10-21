@@ -22,9 +22,10 @@ const fail = (status, code, message) => json({ v: 1, error: code, ...(message ? 
 const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
 
 /**
- * CSP of the teacher pages. The room page (`/room`, which holds the teacher key in its fragment) allows
- * only its own scripts and sockets to this origin. The create page (`/`) additionally allows the
- * Turnstile widget, as Cloudflare documents: script-src and frame-src for challenges.cloudflare.com.
+ * CSP of the service's pages. The room page (`/room`, which holds the teacher key in its fragment) and the
+ * learner join page (`/join`, which holds the learner key in its fragment) allow only their own scripts and
+ * sockets to this origin. The create page (`/`) additionally allows the Turnstile widget, as Cloudflare
+ * documents: script-src and frame-src for challenges.cloudflare.com.
  */
 export function teacherCsp(origin, page = "room") {
   const ws = origin.replace(/^http/, "ws");
@@ -42,7 +43,8 @@ export function teacherCsp(origin, page = "room") {
   ].join("; ");
 }
 
-const pageOf = (path) => (path === "/" || path === "/index.html" ? "create" : "room");
+// "create" only for the create page; every other page and file (/room, /join, scripts, styles) gets the strict policy.
+const pageOf = (path) => (path === "/" || path === "/index.html" ? "create" : path === "/join" || path === "/join.html" ? "join" : "room");
 
 function pageHeaders(res, origin, page) {
   const h = new Headers(res.headers);
@@ -141,7 +143,7 @@ export default {
 
     if (path === "/api/health") return json({ v: 1, ok: true, service: "egatari-live" });
 
-    // Teacher pages and their static files
+    // Teacher pages, the learner join page, and their static files
     if (request.method === "GET" || request.method === "HEAD") {
       const page = pageOf(path);
       let res = await env.ASSETS.fetch(request);

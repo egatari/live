@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Egatari Live room</title>
 <link rel="stylesheet" href="/teacher.css">
-<script src="/teacher.js" defer></script>
+<script type="module" src="/teacher.js"></script>
 </head>
 <body data-page="room">
 <header>
@@ -51,6 +51,12 @@
       <button type="button" id="btn-rekey" class="danger" data-i18n="rekey"></button>
     </div>
     <p class="warn" id="rekeyed" hidden data-i18n="rekeyed"></p>
+
+    <h3 data-i18n="joinLink"></h3>
+    <p class="muted" data-i18n="joinLinkHelp"></p>
+    <p><a id="join-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
+    <div class="row"><button type="button" id="copy-join" data-i18n="copyJoin"></button></div>
+    <p class="warn" id="join-rekeyed" hidden data-i18n="joinRekeyed"></p>
 
     <h3><span data-i18n="waiting"></span> <span id="n-waiting" class="muted"></span></h3>
     <div class="row"><button type="button" id="btn-admit-all" data-i18n="admitAll"></button></div>

@@ -540,7 +540,7 @@ describe("teacher page", () => {
   it("serves its files without inline script or style", async () => {
     const res = await SELF.fetch(ORIGIN + "/");
     const html = await res.text();
-    expect(html).toContain('<script src="/teacher.js" defer></script>');
+    expect(html).toContain('<script type="module" src="/teacher.js"></script>');
     expect(html).not.toMatch(/<script>(?!<)/);
     expect(html).not.toMatch(/\sstyle=/);
     const js = await SELF.fetch(ORIGIN + "/teacher.js");

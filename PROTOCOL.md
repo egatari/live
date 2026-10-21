@@ -1,6 +1,6 @@
 # Egatari Live protocol, version 1
 
-This document defines the wire protocol between an Egatari player (the learner's side), the teacher page, and the Egatari Live room service. It implements the extension `live` of the Egatari format (`egatari-spec/extensions/live.md`). The machine-readable parts are in [`protocol/`](protocol/):
+This document defines the wire protocol between an Egatari player (the learner's side; the service's own join page `/join` speaks the same learner protocol), the teacher page, and the Egatari Live room service. It implements the extension `live` of the Egatari format (`egatari-spec/extensions/live.md`). The machine-readable parts are in [`protocol/`](protocol/):
 
 | File | Contents |
 |---|---|
@@ -35,7 +35,8 @@ All JSON responses carry `cache-control: no-store`. No endpoint sets CORS header
 | Method and path | Auth | Body / reply |
 |---|---|---|
 | `GET /` | none | The create page (HTML, en/ja). The only page that loads Cloudflare Turnstile. |
-| `GET /room` | none (the teacher key is in the fragment) | The room page (teacher dashboard). Its CSP allows no third party. `/teacher.js` and `/teacher.css` are the pages' only own resources. |
+| `GET /room` | none (the teacher key is in the fragment) | The room page (teacher dashboard). Its CSP allows no third party. `/teacher.js`, `/teacher.css` and `/join-core.js` are its only own resources. |
+| `GET /join` | none (room and learner key are in the fragment) | The learner join page (§7.1). Same CSP as `/room`. Its only resources are `/join.js`, `/join-core.js` and `/join.css`. |
 | `POST /api/rooms` | a Turnstile token in the body; `Origin`, if present, must be the service origin; 5 per minute per sender | `createRequest` → `201 createResponse`. Errors: `400` (`bad_request`, `window_too_long`, `room_too_large`, `turnstile_required`), `403` (`forbidden`: foreign Origin; `turnstile_failed`), `413`, `415`, `429` (`rate_limited`), `503` (`unavailable`: Turnstile or the limiter not configured, or siteverify unreachable). |
 | `GET /api/rooms/{room}/results` | `Authorization: Bearer <adminKey>` | `200 results`; `401` without or with a wrong key; `404` when the room does not exist (or was deleted). |
 | `GET /api/health` | none | `{"v":1,"ok":true,"service":"egatari-live"}` |
@@ -75,6 +76,7 @@ wss://live.egatari.org/ws?room=<room>&key=<key>&pid=<pid>
 | `ack` | `ref?`, `item?` (item id for `ask`) | a request was accepted |
 | `error` | `code`, `ref?` | a request was refused; see §4 |
 | `pong` | | reply to `ping` |
+| `activities` | `ref?`, `activities`, `declared` | reply to `activities` (and later updates to the sockets that asked). `activities` is the same object as `extensions.live.activities`; `declared: false` means the teacher set none, so the list is inferred from what was received (any activity id is then accepted, and polls have no `choices`). |
 
 Projected questions carry `id`, `activity`, `step` and `text` only, never who asked.
 
@@ -85,9 +87,10 @@ Projected questions carry `id`, `activity`, `step` and `text` only, never who as
 | `ask` | `activity`, `step`, `text` (1–500 characters) | a question for a `qa` activity. `step` is the step key under which the activity is declared, or, for an activity declared under `*`, the step key on screen when the learner pressed Send (the player MAY send `*`). |
 | `vote` | `activity`, `step`, `choice` (0-based index) | a single-choice poll; a new vote replaces the previous one |
 | `name` | `name` (0–40 characters; empty clears) | only if the learner typed a name; allowed while waiting, so the teacher can recognise who is waiting |
+| `ping` | | keep-alive; answered without waking the room (Hibernation auto-response). Send it exactly as `{"v":1,"t":"ping"}`. At most once per 30 s. |
+| `activities` | | ask for the room's activities. Used by the join page (§7.1), which has no lesson file; a player has them in `extensions.live` and need not send it. Only from admitted learners (`error not_admitted` otherwise). The reply is `activities`, and the server sends it again to that socket whenever the teacher changes the activities. Carries no learner data. |
 
 **Approval.** In a room that requires approval, a learner the teacher has not decided on yet gets `welcome` with `status: "waiting"` and **stays connected**; `admitted` follows when the teacher admits them. Close code **4441 always means a definite decline**: it is sent only after the teacher declined this pid (`deny`), either at that moment or when the declined pid connects again. It never means "still pending". A player shows "The teacher did not admit you" and does not reconnect by itself (the teacher may later admit the pid; a manual "Try again" is fine).
-| `ping` | | keep-alive; answered without waking the room (Hibernation auto-response). Send it exactly as `{"v":1,"t":"ping"}`. At most once per 30 s. |
 
 Nothing else is sent: no viewing position, timing, playback events or device information. `ask` and `vote` from a learner who is still waiting get `error not_admitted`.
 
@@ -202,6 +205,22 @@ v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to
 6a. Never load Turnstile or anything else from the endpoint. Turnstile exists only on the service's create page; the learner endpoint does not use it.
 7. Producers write a CSP `<meta>` into derivatives that carry `live`, with `connect-src` limited to the endpoint (`wss://live.egatari.org`).
 
+### 7.1 The join page (`/join`)
+
+Some devices cannot connect from the distributed file: a lesson opened inside a chat app's browser (for example Slack on iPhone), a file viewer that runs no scripts (iOS Files), a frame. For them the teacher page shows a **Join link / 参加用のリンク** with a Copy button:
+
+```
+https://live.egatari.org/join#room=<room>&key=<key>
+```
+
+- The room and the learner key are **only in the fragment**, which browsers never send, so they reach neither the server's request line nor any log. The page reads them with `location.hash`. Its own requests are `/join`, `/join.js`, `/join-core.js` and `/join.css`, with no query; the only URL that carries the key is the learner WebSocket `/ws?room=&key=&pid=` (§3), which already carries it.
+- The link is built from the room and the **current** learner key. After `rekey` the teacher page updates it and warns that links shared before stop working (the page then stops with 4440).
+- Same data rules as a player (format spec live §2.3): it sends only `ask`, `vote`, `name` (only if typed), `activities` and `ping`. The `pid` is random (16 bytes, base64url), kept in `localStorage` per room (key `egatari-live-pid:<room>`), in memory if storage is blocked. No telemetry; no third parties; every server string is shown with `textContent`. Same CSP as `/room` (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://<host>; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`), with `referrer-policy: no-referrer`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No Turnstile.
+- Before connecting it shows the notice 「この教材は live.egatari.org の授業の部屋につながります」 / "This lesson connects to a live room at live.egatari.org" and a **参加する / Join** button; it connects only after the tap (remembered for the tab in `sessionStorage`, so a reload reconnects). While joined, a persistent indicator with **Disconnect**; while waiting for approval, a waiting notice (and the name field, so the teacher can recognise the learner).
+- Retry table, the same as the Studio player: never by itself after 4400, 4401, 4403, 4404, 4409, 4410, 4440 or 4441 (4441 and 4409 offer a manual "Try again"); 4423 after ≥ 30 s with jitter; 4425 at `window.from`; 4429 and 4430 after ≥ 60 s; network errors with backoff 1–30 s, only inside the window. The link does not carry the window, so before the first `welcome` the page does not know it: a network error is then retried at most 8 times before a manual "Try again", and 4425 waits ≥ 30 s, growing to 5 min.
+- What it shows: the Q&A with a send box (the first `qa` activity, preferring one under `*`; with no activities set, activity `qa` under `*`), the questions the teacher marked "shown", and **all polls the room has activities for**, in declaration order, each with its prompt and its step key ("whole lesson" for `*`). The page has no deck position and the protocol has no notion of an "open" poll, so it cannot show only the current one; the learner answers the one the teacher points to. A `qa` declared under `*` is sent with step `*` (§3.2); a vote is sent with the poll's declared step key and the 0-based choice index.
+- ja and en, from `navigator.language`, with a manual toggle (remembered in `localStorage`). Mobile first; it works from 320 px wide.
+
 ---
 
 ## 日本語の要約
@@ -209,6 +228,7 @@ v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to
 Egatari Live は、配った教材（再生専用のファイル）から、そのまま授業の Q&A と投票に参加するための通信の約束です。
 
 - **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから。Cloudflare Turnstile のトークンが要る。送り手ごとに 1 分 5 部屋まで。時間の窓は 3 時間まで（`window_too_long`）、人数の見込みは 60 人まで（`room_too_large`））。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
+- **参加用のページ**：教材のファイルからつながらない端末（スマートフォンのチャットのアプリの中のブラウザ、ファイルを見るだけのアプリなど）のために、`/join#room=…&key=…` のリンクを教員のページに出す。部屋と鍵は `#` の後ろにだけあり、サーバーには送られない。送るもの・決まり・つなぎ直し方は再生アプリと同じ。投票は、部屋にあるものをすべて段階の鍵と一緒に出す（このページには今の段階がなく、通信の約束にも「いま開いている投票」がないため）。部屋の活動は、新しい `activities` の問い合わせで受け取る（§7.1）。
 - **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
 - **教員の WebSocket**：`/ws/teacher?room=`。最初のメッセージで `adminKey` を送る。部屋を開ける・閉じる、承認（待合）、参加の鍵の取り替え（古い鍵の人は切断）、質問の「読んだ・答えた・映す・隠す」、投票の集計。
 - **版**：すべてのメッセージに `v: 1`。知らない項目・知らない種類は拒否する。

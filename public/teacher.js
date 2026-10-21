@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Egatari Live teacher page. Plain JS, no framework. Every learner-provided string is shown with textContent.
-"use strict";
+import { joinUrl } from "/join-core.js";
+
 (function () {
   const T = {
     en: {
@@ -17,6 +18,9 @@
       copySnippet: "Copy", rekey: "Replace learner key",
       rekeyConfirm: "Replace the learner key? Everyone connected with the old key is disconnected, and files exported with it stop working. You will need to export the lesson again.",
       rekeyed: "The learner key was replaced. Export the lesson again with the room and key above.",
+      joinLink: "Join link", copyJoin: "Copy join link",
+      joinLinkHelp: "For learners whose device cannot connect from the lesson file (for example a link opened inside a chat app, or a file viewer): they open this link in a browser. It contains the learner key (after #, never sent to the server as part of the address), not your teacher key. Anyone with it can join while the room is open.",
+      joinRekeyed: "The key was replaced: join links shared before no longer work. Share the new link above.",
       waiting: "Waiting for approval", admitAll: "Admit all", admit: "Admit", deny: "Decline",
       questions: "Questions", showHidden: "Show hidden questions",
       read: "read", answered: "answered", shown: "shown", hidden: "hidden",
@@ -51,6 +55,9 @@
       copySnippet: "コピー", rekey: "参加の鍵を替える",
       rekeyConfirm: "参加の鍵を替えますか？ 古い鍵でつながっている人は切断され、古い鍵で書き出したファイルでは入れなくなります。教材を書き出し直す必要があります。",
       rekeyed: "参加の鍵を替えました。上の部屋と鍵で教材を書き出し直してください。",
+      joinLink: "参加用のリンク", copyJoin: "参加用のリンクをコピー",
+      joinLinkHelp: "教材のファイルからつながらない端末（チャットのアプリの中で開いたときや、ファイルを見るだけのアプリなど）の人は、このリンクをブラウザで開いて参加します。入っているのは参加の鍵（# の後ろにあり、アドレスとしてサーバーには送られません）で、教員の鍵は入りません。部屋が開いているあいだ、このリンクを持つ人は誰でも参加できます。",
+      joinRekeyed: "鍵を替えたので、前に配った参加用のリンクは使えなくなりました。上の新しいリンクを配ってください。",
       waiting: "承認待ち", admitAll: "全員を入れる", admit: "入れる", deny: "断る",
       questions: "質問", showHidden: "隠した質問も表示",
       read: "読んだ", answered: "答えた", shown: "映す", hidden: "隠す",
@@ -208,7 +215,7 @@
         renderItems();
       } break;
       case "tally": if (S.state) { S.state.tallies[m.activity] = { counts: m.counts, total: m.total }; renderPolls(); } break;
-      case "rekeyed": if (S.state) { S.state.key = m.key; $("rekeyed").hidden = false; renderStatus(); } break;
+      case "rekeyed": if (S.state) { S.state.key = m.key; $("rekeyed").hidden = false; $("join-rekeyed").hidden = false; renderStatus(); } break;
       case "error": $("dash-error").textContent = m.code + (m.message ? ": " + m.message : ""); break;
     }
   }
@@ -230,6 +237,10 @@
     $("btn-close").disabled = !st.open;
     $("chk-approval").checked = st.requireApproval;
     $("snippet").value = snippet(st);
+    // Learners' join link: room and the current learner key, in the fragment only.
+    const jl = joinUrl(location.origin, st.room, st.key);
+    $("join-link").href = jl;
+    $("join-link").textContent = jl;
     if (document.activeElement !== $("act-edit")) $("act-edit").value = JSON.stringify(st.activities || {}, null, 2);
   }
 
@@ -304,6 +315,7 @@
     $("btn-rekey").addEventListener("click", () => { if (confirm(t("rekeyConfirm"))) send({ t: "rekey" }); });
     $("btn-admit-all").addEventListener("click", () => send({ t: "admitAll" }));
     $("copy-snippet").addEventListener("click", () => copy($("snippet").value));
+    $("copy-join").addEventListener("click", () => copy($("join-link").href));
     $("btn-download").addEventListener("click", download);
     $("chk-hidden").addEventListener("change", (ev) => { S.showHidden = ev.target.checked; if (S.state) renderItems(); });
     $("btn-activities").addEventListener("click", () => {

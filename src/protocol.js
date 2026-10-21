@@ -156,6 +156,11 @@ export function checkLearnerMessage(m) {
       if ([...name].length > L.MAX_NAME_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG);
       return { t: "name", ref: m.ref, name };
     }
+    case "activities": {
+      // the join page has no lesson file, so it asks the room for its activities
+      if (!only(m, base)) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
+      return { t: "activities", ref: m.ref };
+    }
     default:
       throw new ProtocolError(ERR.UNKNOWN_TYPE, `unknown type ${m.t}`);
   }

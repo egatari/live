@@ -5,6 +5,8 @@ Part of Egatari Studio; the reference implementation behind live.egatari.org.
 
 Egatari Live lets learners ask questions and answer polls from inside a distributed Egatari lesson, without scanning a code or opening another app. The teacher creates a room on this service's page, pastes the room and its learner key into the editor's export settings, and hands out the play-only file. While the room's time window is open, a player that implements the `live` extension shows a **Join** button; after one tap the lesson connects to the room.
 
+For devices that cannot connect from the file (a lesson opened inside a chat app's browser such as Slack on iPhone, a file viewer that runs no scripts such as iOS Files), the teacher page also gives a **join link**, `https://live.egatari.org/join#room=…&key=…`, that learners open in a browser. The room and key are only in the fragment, so they never reach the server or its logs; the page speaks the same learner protocol with the same data rules (PROTOCOL.md §7.1).
+
 It runs on Cloudflare Workers with one Durable Object per room, using the WebSocket Hibernation API so that idle rooms cost nothing. There is no database outside the rooms, no R2, no accounts and no cookies.
 
 - Protocol: [PROTOCOL.md](PROTOCOL.md), with the JSON Schema, close codes and fixture messages in [`protocol/`](protocol/).
@@ -46,8 +48,9 @@ For tests and offline development the server answers Cloudflare's documented Tur
 2. **Bookmark the teacher link** that appears (`…/room#room=…&admin=…`). The teacher key in it is shown once; if it is lost, create a new room.
 3. Copy the "For the editor" snippet (endpoint, room, key, window) into the editor's export settings, and export the play-only file.
 4. During the lesson, keep the teacher page open: open or close the room, admit learners if approval is required, mark questions read, answered, shown or hidden, and watch poll tallies.
-5. If the file leaks, **Replace learner key**: everyone with the old key is disconnected; export again with the new key.
-6. After the lesson, **Download results (JSON)** before the grace period ends.
+5. If a learner's device cannot join from the file, send them the **Join link** (Copy button on the room page). They open it in a browser, tap **Join**, and see the Q&A, the questions you show, and all the room's polls (each labelled with its step key, since the page has no slide position: tell them which poll to answer).
+6. If the file leaks, **Replace learner key**: everyone with the old key is disconnected; export again with the new key, and share the new join link (old join links stop working too).
+7. After the lesson, **Download results (JSON)** before the grace period ends.
 
 ## Development
 
@@ -57,7 +60,7 @@ npm test          # vitest + @cloudflare/vitest-pool-workers, fully local (Minif
 npm run dev       # wrangler dev on http://localhost:8787
 ```
 
-Dependencies are pinned to exact versions. The tests cover creation and joining, a wrong key, key replacement, approval, close and reopen, the expiry alarm, the rate limits (messages and room creation), oversize messages, `Origin: null`, teacher endpoints without the teacher key, the results shape, hibernation, Turnstile (missing, failed and passed tokens; the siteverify call with an injected fetch), the v1 caps, both pages' CSPs, and that every fixture in `protocol/` validates against the schema. No test touches the network.
+Dependencies are pinned to exact versions. The tests cover creation and joining, a wrong key, key replacement, approval, close and reopen, the expiry alarm, the rate limits (messages and room creation), oversize messages, `Origin: null`, teacher endpoints without the teacher key, the results shape, hibernation, Turnstile (missing, failed and passed tokens; the siteverify call with an injected fetch), the v1 caps, the pages' CSPs, the join page (its headers and files, the join link on the teacher page before and after rekey, its retry table, and its client core driven against a live room: join, ask→ack, vote→ack, waiting→admitted, 4440 stops, 4423 retries, and that the only URL carrying the key is the WebSocket), and that every fixture in `protocol/` validates against the schema. No test touches the network.
 
 ## Deploy (for the maintainer; not done yet)
 
@@ -75,6 +78,9 @@ Deploying is done by hand after the end-to-end tests with Studio pass.
    curl -s https://live.egatari.org/api/health
    # {"v":1,"ok":true,"service":"egatari-live"}
    curl -sI https://live.egatari.org/ | grep -i content-security-policy
+   # the learner join page: strict CSP, no third party
+   curl -sI https://live.egatari.org/join | grep -i -E 'content-security-policy|x-frame-options|referrer-policy'
+   # content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://live.egatari.org; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
    # room creation without a token must be refused:
    curl -s -X POST https://live.egatari.org/api/rooms -H 'content-type: application/json' \
      -d '{"window":{"from":"2030-01-01T09:00:00Z","to":"2030-01-01T10:00:00Z"}}'
@@ -99,6 +105,8 @@ The service (everything outside `protocol/`) is licensed under the **GNU Affero 
 
 Egatari Live は、配った Egatari の教材の中から、学ぶ人が質問し、投票に答えられるようにするサービスです。QR コードを読んだり別のアプリを開いたりする必要はありません。教員はこのサービスのページで部屋を作り、部屋と参加の鍵を編集アプリの書き出しの設定に貼って、再生専用のファイルを配ります。部屋の時間の窓のあいだ、`live` 拡張に対応した再生アプリは「参加する」のボタンを出し、1 回押すと授業の部屋につながります。
 
+教材のファイルからつながらない端末（Slack などチャットのアプリの中のブラウザで開いたとき、iOS の「ファイル」のようにスクリプトを動かさないアプリ）のために、教員のページは**参加用のリンク** `https://live.egatari.org/join#room=…&key=…` も出します。学ぶ人はこれをブラウザで開きます。部屋と鍵は `#` の後ろにだけあるので、サーバーにもログにも届きません。通信の約束と送るものの決まりは再生アプリと同じです（PROTOCOL.md §7.1）。
+
 Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、WebSocket Hibernation で待ち時間には課金されません。部屋の外のデータベース、R2、アカウント、Cookie はありません。
 
 ### プライバシー
@@ -112,11 +120,12 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 ### 使い方
 
 1. サービスのページで時間の窓を決めて、部屋を作る。
-2. 表示される教員のリンク（`…/#room=…&admin=…`）を**すぐブックマークする**。教員の鍵は一度しか表示されず、なくしたら部屋を作り直す。
+2. 表示される教員のリンク（`…/room#room=…&admin=…`）を**すぐブックマークする**。教員の鍵は一度しか表示されず、なくしたら部屋を作り直す。
 3. 「編集アプリに貼る」の内容（行き先・部屋・鍵・時間の窓）を書き出しの設定に貼り、再生専用のファイルを書き出す。
 4. 授業中は教員のページを開いておく：部屋を開ける・閉じる、承認、質問の「読んだ・答えた・映す・隠す」、投票の集計。
-5. ファイルが外に出たら「参加の鍵を替える」。古い鍵の人は切断されるので、新しい鍵で書き出し直す。
-6. 授業の後、猶予が終わる前に「結果をダウンロード（JSON）」。
+5. 教材のファイルから参加できない端末の人には「参加用のリンク」を送る（部屋のページのコピーのボタン）。ブラウザで開いて「参加する」を押すと、質問の欄、映した質問、部屋のすべての投票が出る（このページには今のスライドがないので、投票には段階の鍵を添えて全部出す。どれに答えるかは口で伝える）。
+6. ファイルが外に出たら「参加の鍵を替える」。古い鍵の人は切断されるので、新しい鍵で書き出し直し、新しい参加用のリンクを配る（古いリンクも使えなくなる）。
+7. 授業の後、猶予が終わる前に「結果をダウンロード（JSON）」。
 
 ### v1 の部屋の大きさと悪用の対策
 
