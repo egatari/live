@@ -3,7 +3,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import {
-  JoinClient, joinUrl, parseFragment, socketUrl, plan, closeInfo, viewOf, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
+  JoinClient, joinUrl, parseFragment, socketUrl, plan, closeInfo, viewOf, stepText, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
 } from "../public/join-core.js";
 import { ORIGIN, createRoom, joinTeacher, validate } from "./helpers.js";
 
@@ -159,7 +159,7 @@ describe("join page: links", () => {
     expect(html).toContain('id="join-rekeyed"');
     expect(html).toContain('<script type="module" src="/teacher.js"></script>');
     const js = await (await SELF.fetch(ORIGIN + "/teacher.js")).text();
-    expect(js).toContain('import { joinUrl } from "/join-core.js"');
+    expect(js).toContain('import { joinUrl, stepText } from "/join-core.js"');
     expect(js).toContain("joinUrl(location.origin, st.room, st.key)");
     expect(js).toMatch(/case "rekeyed":[^\n]*\$\("join-rekeyed"\)\.hidden = false[^\n]*renderStatus\(\)/);
     expect(js).toContain("参加用のリンク");
@@ -439,5 +439,36 @@ describe("join page: against a live room", () => {
     expect(socks).toHaveLength(1);
     client.leave();
     t.close();
+  });
+});
+
+describe("activity labels on the join and teacher pages", () => {
+  it("stepText shows the label; without one, * is the whole lesson and <slide>:<k> is 'slide · step k+1'", () => {
+    expect(stepText("s-cjatth:0", "4 枚目『XML の壁』・段階 1", "ja")).toBe("4 枚目『XML の壁』・段階 1");
+    expect(stepText("s-cjatth:0", "Slide 4 'XML の壁', step 1", "en")).toBe("Slide 4 'XML の壁', step 1");
+    expect(stepText("s-cjatth:0", undefined, "ja")).toBe("s-cjatth · 段階 1");
+    expect(stepText("s-cjatth:0", "", "en")).toBe("s-cjatth · step 1");
+    expect(stepText("s-cjatth:concl", null, "ja")).toBe("s-cjatth · 段階 concl");
+    expect(stepText("*", undefined, "ja")).toBe("教材全体");
+    expect(stepText("*", undefined, "en")).toBe("whole lesson");
+    expect(stepText("a:b:2", undefined, "en")).toBe("a:b · step 3");
+  });
+  it("viewOf passes each poll's label through; older polls without one have none", () => {
+    const v = viewOf({
+      "s-cjatth:0": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"], label: "4 枚目『XML の壁』・段階 1" }],
+      "s-old:1": [{ id: "p2", kind: "poll", prompt: "Old?", choices: ["a", "b"] }],
+    }, true);
+    expect(v.polls.map((p) => [p.id, p.label])).toEqual([["p1", "4 枚目『XML の壁』・段階 1"], ["p2", undefined]]);
+    expect(v.polls.map((p) => stepText(p.step, p.label, "ja"))).toEqual(["4 枚目『XML の壁』・段階 1", "s-old · 段階 2"]);
+  });
+  it("both pages render the step with stepText as text (textContent), with the key in a title tooltip", async () => {
+    const join = await (await SELF.fetch(ORIGIN + "/join.js")).text();
+    expect(join).toContain('h("span", "step", `${t("step")}: ${stepText(p.step, p.label, lang)}`)');
+    expect(join).toContain("st.title = p.step;");
+    expect(join).not.toMatch(/innerHTML|insertAdjacentHTML/);
+    const teacher = await (await SELF.fetch(ORIGIN + "/teacher.js")).text();
+    expect(teacher).toContain('import { joinUrl, stepText } from "/join-core.js"');
+    expect(teacher).toContain('el("p", { class: "poll-step muted", title: `${d.step} · ${id}`, text: stepText(d.step, d.label, lang) })');
+    expect(teacher).not.toMatch(/innerHTML|insertAdjacentHTML/);
   });
 });

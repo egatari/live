@@ -553,3 +553,56 @@ describe("teacher page", () => {
     expect(await res.json()).toEqual({ v: 1, ok: true, service: "egatari-live" });
   });
 });
+
+describe("activity labels (display text for a step)", () => {
+  const LABEL = "4 枚目『XML の壁』・段階 1";
+  const labelled = {
+    "*": [{ id: "qa", kind: "qa", label: "教材全体" }],
+    "s-cjatth:0": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"], label: LABEL }],
+    "s-old:1": [{ id: "p2", kind: "poll", prompt: "Old?", choices: ["a", "b"] }],
+  };
+  const post = async (body) => { const res = await SELF.fetch(createRequest(body)); return [res.status, (await res.json()).error || null]; };
+
+  it("a label is accepted on create, kept in the teacher state, the learners' activities and the results", async () => {
+    expect(validate(labelled, "activities")).toEqual([]);
+    const r = await createRoom({ activities: labelled });
+    const t = await joinTeacher(r);
+    ok(t.state, "serverToTeacher");
+    expect(t.state.activities["s-cjatth:0"][0].label).toBe(LABEL);
+    expect(t.state.activities["s-old:1"][0]).not.toHaveProperty("label");   // older activities still work, unlabelled
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send({ v: 1, t: "activities", ref: "a1" });
+    const m = await c.next("activities");
+    ok(m, "serverToLearner");
+    expect(m.activities).toEqual(labelled);
+    c.send({ v: 1, t: "vote", activity: "p1", step: "s-cjatth:0", choice: 1 }); await c.next("ack");
+    c.send({ v: 1, t: "vote", activity: "p2", step: "s-old:1", choice: 0 }); await c.next("ack");
+    const j = await (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    ok(j, "results");
+    expect(j.activities).toEqual(labelled);
+    expect(j.responses.map((x) => x.step)).toEqual(["s-cjatth:0", "s-old:1"]);   // keys stay as they are
+    c.close(); t.close();
+  });
+
+  it("a label is trimmed and folded to one line; a label of up to 80 characters is accepted, a longer one refused", async () => {
+    const one = (label) => ({ "s1:0": [{ id: "p1", kind: "poll", choices: ["a", "b"], label }] });
+    const r = await createRoom({ activities: one("  Slide 1\n'Intro',   step 1 ") });
+    const t = await joinTeacher(r);
+    expect(t.state.activities["s1:0"][0].label).toBe("Slide 1 'Intro', step 1");
+    t.close();
+    expect((await post({ activities: one("字".repeat(L.MAX_LABEL_CHARS)) }))[0]).toBe(201);
+    expect(await post({ activities: one("字".repeat(L.MAX_LABEL_CHARS + 1)) })).toEqual([400, "text_too_long"]);
+    expect(await post({ activities: one(42) })).toEqual([400, "bad_message"]);
+    expect(validate(one("x".repeat(81)), "activities")).not.toEqual([]);
+    // the same cap when the teacher replaces the activities
+    const r2 = await createRoom();
+    const t2 = await joinTeacher(r2);
+    t2.send({ v: 1, t: "activities", ref: "x1", activities: one("x".repeat(L.MAX_LABEL_CHARS + 1)) });
+    expect((await t2.next("error")).code).toBe("text_too_long");
+    t2.send({ v: 1, t: "activities", ref: "x2", activities: one(LABEL) });
+    const st = await t2.next("state", (s) => !!s.activities["s1:0"]);
+    expect(st.activities["s1:0"][0].label).toBe(LABEL);
+    t2.close();
+  });
+});

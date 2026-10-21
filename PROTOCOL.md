@@ -26,6 +26,7 @@ This document defines the wire protocol between an Egatari player (the learner's
 | `pid` (participant id) | 16–43 characters of `[A-Za-z0-9_-]` | the learner's device, at random (e.g. 16 random bytes, base64url), kept in `localStorage` per room |
 | step key | `slideKey:stepKey` as in the format spec, or `*` | the lesson |
 | activity id | 1–32 characters of `[A-Za-z0-9_-]` | the lesson |
+| activity label (optional) | up to 80 characters of display text, e.g. `Slide 4 'XML の壁', step 1` | the editor, when it creates the activity |
 | item id | `q-` + 10 base32 characters | service |
 
 ## 2. HTTP endpoints
@@ -49,11 +50,11 @@ Errors are `httpError`: `{"v":1, "error": "<code>", "message": "..."}`.
 - `window.to` must be after `window.from` and in the future; at most **3 hours** long (`window_too_long`); it may start at most 180 days ahead.
 - `size` (optional): the number of learners expected. More than **60** is refused (`room_too_large`). v1 rooms are for one class.
 - `graceHours` (default 24, 0–168): how long after `window.to` the room is kept so the teacher can download results. Then the room deletes itself.
-- `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees.
+- `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees. Each activity (`qa` or `poll`) may carry `label` (optional, at most 80 characters after trimming, whitespace runs folded to one space; `text_too_long` if longer): display text for where it is in the lesson, written by the editor (slide number, slide heading, step number). It is text only: keys and step keys stay as they are, the server never interprets it, and pages show it with `textContent`. An activity without a label is shown by its step key (`*` as "whole lesson"; `s-xxx:0` as `s-xxx · step 1`).
 
 `createResponse` returns `endpoint`, `room`, `key`, `adminKey`, the `window`, `graceHours`, `expiresAt` (= `window.to` + grace), `requireApproval` and `teacherUrl` = `<endpoint>/room#room=<room>&admin=<adminKey>`. The teacher page shows the link once and tells the teacher to bookmark it. There is no recovery: a teacher who loses it creates a new room.
 
-**Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text` and moderation flags (`read`, `answered`, `shown`, `hidden`), for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
+**Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text` and moderation flags (`read`, `answered`, `shown`, `hidden`), for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. `activities` keeps each activity's `label`. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
 
 ## 3. Learner WebSocket
 
@@ -179,7 +180,7 @@ v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to
 | Limit | Value | Why |
 |---|---|---|
 | learner frame | 2048 bytes | a 500-character question in UTF-8 plus the envelope |
-| question / name / poll prompt / choice | 500 / 40 / 300 / 100 characters | text only |
+| question / name / poll prompt / choice / activity label | 500 / 40 / 300 / 100 / 80 characters | text only |
 | rate | bucket of 5 messages, one more every 2 s; closed after 10 dropped messages | a person types far slower |
 | questions per participant | 20 | |
 | concurrent learners per room | **60** | 40 + 50 % for late joiners and a second device |
@@ -218,7 +219,7 @@ https://live.egatari.org/join#room=<room>&key=<key>
 - Same data rules as a player (format spec live §2.3): it sends only `ask`, `vote`, `name` (only if typed), `activities` and `ping`. The `pid` is random (16 bytes, base64url), kept in `localStorage` per room (key `egatari-live-pid:<room>`), in memory if storage is blocked. No telemetry; no third parties; every server string is shown with `textContent`. Same CSP as `/room` (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://<host>; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`), with `referrer-policy: no-referrer`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No Turnstile.
 - Before connecting it shows the notice 「この教材は live.egatari.org の授業の部屋につながります」 / "This lesson connects to a live room at live.egatari.org" and a **参加する / Join** button; it connects only after the tap (remembered for the tab in `sessionStorage`, so a reload reconnects). While joined, a persistent indicator with **Disconnect**; while waiting for approval, a waiting notice (and the name field, so the teacher can recognise the learner).
 - Retry table, the same as the Studio player: never by itself after 4400, 4401, 4403, 4404, 4409, 4410, 4440 or 4441 (4441 and 4409 offer a manual "Try again"); 4423 after ≥ 30 s with jitter; 4425 at `window.from`; 4429 and 4430 after ≥ 60 s; network errors with backoff 1–30 s, only inside the window. The link does not carry the window, so before the first `welcome` the page does not know it: a network error is then retried at most 8 times before a manual "Try again", and 4425 waits ≥ 30 s, growing to 5 min.
-- What it shows: the Q&A with a send box (the first `qa` activity, preferring one under `*`; with no activities set, activity `qa` under `*`), the questions the teacher marked "shown", and **all polls the room has activities for**, in declaration order, each with its prompt and its step key ("whole lesson" for `*`). The page has no deck position and the protocol has no notion of an "open" poll, so it cannot show only the current one; the learner answers the one the teacher points to. A `qa` declared under `*` is sent with step `*` (§3.2); a vote is sent with the poll's declared step key and the 0-based choice index.
+- What it shows: the Q&A with a send box (the first `qa` activity, preferring one under `*`; with no activities set, activity `qa` under `*`), the questions the teacher marked "shown", and **all polls the room has activities for**, in declaration order, each with its prompt and its step: the activity's `label` if it has one, otherwise the step key ("whole lesson" for `*`, `s-xxx · step 1` for `s-xxx:0`), with the step key in a tooltip. The page has no deck position and the protocol has no notion of an "open" poll, so it cannot show only the current one; the learner answers the one the teacher points to. A `qa` declared under `*` is sent with step `*` (§3.2); a vote is sent with the poll's declared step key and the 0-based choice index.
 - ja and en, from `navigator.language`, with a manual toggle (remembered in `localStorage`). Mobile first; it works from 320 px wide.
 
 ---
@@ -228,8 +229,9 @@ https://live.egatari.org/join#room=<room>&key=<key>
 Egatari Live は、配った教材（再生専用のファイル）から、そのまま授業の Q&A と投票に参加するための通信の約束です。
 
 - **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから。Cloudflare Turnstile のトークンが要る。送り手ごとに 1 分 5 部屋まで。時間の窓は 3 時間まで（`window_too_long`）、人数の見込みは 60 人まで（`room_too_large`））。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
-- **参加用のページ**：教材のファイルからつながらない端末（スマートフォンのチャットのアプリの中のブラウザ、ファイルを見るだけのアプリなど）のために、`/join#room=…&key=…` のリンクを教員のページに出す。部屋と鍵は `#` の後ろにだけあり、サーバーには送られない。送るもの・決まり・つなぎ直し方は再生アプリと同じ。投票は、部屋にあるものをすべて段階の鍵と一緒に出す（このページには今の段階がなく、通信の約束にも「いま開いている投票」がないため）。部屋の活動は、新しい `activities` の問い合わせで受け取る（§7.1）。
+- **参加用のページ**：教材のファイルからつながらない端末（スマートフォンのチャットのアプリの中のブラウザ、ファイルを見るだけのアプリなど）のために、`/join#room=…&key=…` のリンクを教員のページに出す。部屋と鍵は `#` の後ろにだけあり、サーバーには送られない。送るもの・決まり・つなぎ直し方は再生アプリと同じ。投票は、部屋にあるものをすべて、段階の表示（活動の `label`。なければ段階の鍵。`*` は「教材全体」）と一緒に出す（このページには今の段階がなく、通信の約束にも「いま開いている投票」がないため）。部屋の活動は、新しい `activities` の問い合わせで受け取る（§7.1）。
 - **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
+- **活動の表示名**：活動（`qa`・`poll`）は任意で `label`（80 字まで。例「4 枚目『XML の壁』・段階 1」）を持てる。編集アプリが活動を作るときに書く表示のための字で、鍵や段階の鍵はそのまま。教員のページと参加用のページは、段階の鍵の代わりにこれを出し（鍵は title の吹き出し）、結果の JSON の `activities` にも残る。`label` のない古い活動は段階の鍵（「s-xxx · 段階 1」）で出す。
 - **教員の WebSocket**：`/ws/teacher?room=`。最初のメッセージで `adminKey` を送る。部屋を開ける・閉じる、承認（待合）、参加の鍵の取り替え（古い鍵の人は切断）、質問の「読んだ・答えた・映す・隠す」、投票の集計。
 - **版**：すべてのメッセージに `v: 1`。知らない項目・知らない種類は拒否する。
 - **承認**：待っている人には `welcome`（`status: "waiting"`）が届き、接続は切れない。4441 は教員が「断る」を選んだときだけで、「まだ待っている」の意味にはならない。

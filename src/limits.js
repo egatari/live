@@ -14,6 +14,7 @@ export const MAX_QUESTION_CHARS = 500;
 export const MAX_NAME_CHARS = 40;
 export const MAX_PROMPT_CHARS = 300;
 export const MAX_CHOICE_CHARS = 100;
+export const MAX_LABEL_CHARS = 80;          // an activity's display label ("Slide 4 'XML', step 1"); text only, never a key
 
 // Rate limit per learner connection: token bucket
 export const RATE_BURST = 5;              // messages that may arrive at once

@@ -48,7 +48,7 @@ For tests and offline development the server answers Cloudflare's documented Tur
 2. **Bookmark the teacher link** that appears (`…/room#room=…&admin=…`). The teacher key in it is shown once; if it is lost, create a new room.
 3. Copy the "For the editor" snippet (endpoint, room, key, window) into the editor's export settings, and export the play-only file.
 4. During the lesson, keep the teacher page open: open or close the room, admit learners if approval is required, mark questions read, answered, shown or hidden, and watch poll tallies.
-5. If a learner's device cannot join from the file, send them the **Join link** (Copy button on the room page). They open it in a browser, tap **Join**, and see the Q&A, the questions you show, and all the room's polls (each labelled with its step key, since the page has no slide position: tell them which poll to answer).
+5. If a learner's device cannot join from the file, send them the **Join link** (Copy button on the room page). They open it in a browser, tap **Join**, and see the Q&A, the questions you show, and all the room's polls (each labelled with where it is in the lesson, e.g. "Slide 4 'XML の壁', step 1", or its step key for activities made before labels existed, since the page has no slide position: tell them which poll to answer).
 6. If the file leaks, **Replace learner key**: everyone with the old key is disconnected; export again with the new key, and share the new join link (old join links stop working too).
 7. After the lesson, **Download results (JSON)** before the grace period ends.
 
@@ -123,7 +123,7 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 2. 表示される教員のリンク（`…/room#room=…&admin=…`）を**すぐブックマークする**。教員の鍵は一度しか表示されず、なくしたら部屋を作り直す。
 3. 「編集アプリに貼る」の内容（行き先・部屋・鍵・時間の窓）を書き出しの設定に貼り、再生専用のファイルを書き出す。
 4. 授業中は教員のページを開いておく：部屋を開ける・閉じる、承認、質問の「読んだ・答えた・映す・隠す」、投票の集計。
-5. 教材のファイルから参加できない端末の人には「参加用のリンク」を送る（部屋のページのコピーのボタン）。ブラウザで開いて「参加する」を押すと、質問の欄、映した質問、部屋のすべての投票が出る（このページには今のスライドがないので、投票には段階の鍵を添えて全部出す。どれに答えるかは口で伝える）。
+5. 教材のファイルから参加できない端末の人には「参加用のリンク」を送る（部屋のページのコピーのボタン）。ブラウザで開いて「参加する」を押すと、質問の欄、映した質問、部屋のすべての投票が出る（このページには今のスライドがないので、投票には教材のどこか（例「4 枚目『XML の壁』・段階 1」。表示名のない古い活動では段階の鍵）を添えて全部出す。どれに答えるかは口で伝える）。
 6. ファイルが外に出たら「参加の鍵を替える」。古い鍵の人は切断されるので、新しい鍵で書き出し直し、新しい参加用のリンクを配る（古いリンクも使えなくなる）。
 7. 授業の後、猶予が終わる前に「結果をダウンロード（JSON）」。
 

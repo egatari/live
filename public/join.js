@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Egatari Live learner join page (/join#room=…&key=…): for devices that cannot connect from the lesson file.
 // Draws the DOM for the core in /join-core.js. Every server-provided string is shown with textContent.
-import { JoinClient, parseFragment, LIMITS } from "/join-core.js";
+import { JoinClient, parseFragment, LIMITS, stepText } from "/join-core.js";
 
 const HOST = location.host;
 const T = {
@@ -13,7 +13,7 @@ const T = {
     retrying: (s) => `${s} 秒後につなぎ直します`, left: "切断しました。もう一度参加できます",
     name: "名前（任意）", nameNote: "入れたときだけ先生に見えます。", ask: "質問", send: "送る", sent: "質問を送りました",
     shown: "画面に映された質問", polls: "投票", pollsNote: "部屋にあるすべての投票です。先生が指示した投票に答えてください。",
-    step: "段階", wholeLesson: "授業全体", vote: "投票する", voted: "投票しました（選び直せます）",
+    step: "段階", vote: "投票する", voted: "投票しました（選び直せます）",
     privacy: "送るのは、送ると決めた質問と投票（と入れたときの名前）、この端末で作った番号だけです。",
     footer: "Egatari Live（Egatari Studio の一部）。アカウントも利用状況の記録もありません。",
     stop: {
@@ -40,7 +40,7 @@ const T = {
     retrying: (s) => `Reconnecting in ${s} s`, left: "Disconnected. You can join again",
     name: "Name (optional)", nameNote: "The teacher sees it only if you type one.", ask: "Question", send: "Send", sent: "Question sent",
     shown: "Questions on screen", polls: "Polls", pollsNote: "All polls in this room. Answer the one your teacher asks for.",
-    step: "Step", wholeLesson: "whole lesson", vote: "Vote", voted: "Vote recorded (you can change it)",
+    step: "Step", vote: "Vote", voted: "Vote recorded (you can change it)",
     privacy: "Only what you choose to send (questions, votes, and a name if you type one) and a random id made on this device are sent.",
     footer: "Egatari Live, part of Egatari Studio. No accounts, no telemetry.",
     stop: {
@@ -118,13 +118,15 @@ function render() {
 function renderPolls(polls, votes) {
   const box = $("polls");
   $("polls-box").hidden = !polls.length;
-  const sig = polls.map((p) => `${p.step}/${p.id}/${p.choices.length}`).join("|");
+  const sig = polls.map((p) => `${p.step}/${p.id}/${p.choices.length}/${p.label || ""}`).join("|");
   if (box.getAttribute("data-sig") !== sig) {
     box.setAttribute("data-sig", sig);
     box.replaceChildren(...polls.map((p) => {
       const fs = h("fieldset"); fs.dataset.poll = p.id;
       fs.append(h("legend", "", p.prompt || p.id));
-      fs.append(h("span", "step", `${t("step")}: ${p.step === "*" ? t("wholeLesson") : p.step}`));
+      const st = h("span", "step", `${t("step")}: ${stepText(p.step, p.label, lang)}`);
+      st.title = p.step;   // the key itself, for the teacher's eye
+      fs.append(st);
       p.choices.forEach((c, j) => {
         const l = h("label", "choice"), r = document.createElement("input");
         r.type = "radio"; r.name = "poll-" + p.id; r.value = String(j);

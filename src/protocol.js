@@ -221,8 +221,17 @@ export function checkActivities(a) {
       if (ids.has(act.id)) throw new ProtocolError(ERR.BAD_MESSAGE, `duplicate activity id ${act.id}`);
       ids.add(act.id);
       if (ids.size > L.MAX_ACTIVITIES) throw new ProtocolError(ERR.ROOM_LIMIT, "too many activities");
+      // label (optional): display text for the step ("Slide 4 'XML', step 1"). Keys stay as they are.
+      let label;
+      if (act.label !== undefined) {
+        if (typeof act.label !== "string") throw new ProtocolError(ERR.BAD_MESSAGE, "label must be a string");
+        label = cleanText(act.label).replace(/\s+/g, " ");
+        if ([...label].length > L.MAX_LABEL_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG, "label too long");
+        if (!label) label = undefined;
+      }
+      const lab = label === undefined ? {} : { label };
       if (act.kind === "qa") {
-        out[step].push({ id: act.id, kind: "qa" });
+        out[step].push({ id: act.id, kind: "qa", ...lab });
       } else if (act.kind === "poll") {
         const prompt = act.prompt === undefined ? undefined : cleanText(act.prompt);
         if (prompt !== undefined && [...prompt].length > L.MAX_PROMPT_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG, "prompt too long");
@@ -235,7 +244,7 @@ export function checkActivities(a) {
           if ([...s].length > L.MAX_CHOICE_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG, "choice too long");
           return s;
         });
-        out[step].push(prompt === undefined ? { id: act.id, kind: "poll", choices } : { id: act.id, kind: "poll", prompt, choices });
+        out[step].push(prompt === undefined ? { id: act.id, kind: "poll", choices, ...lab } : { id: act.id, kind: "poll", prompt, choices, ...lab });
       } else {
         throw new ProtocolError(ERR.BAD_MESSAGE, `unsupported kind ${act.kind}`);
       }

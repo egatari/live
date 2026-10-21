@@ -121,10 +121,31 @@ export function newPid(cryptoObj = globalThis.crypto) {
 
 // ------------------------------------------------------------------ activities as the page shows them
 
+const STEP_WORDS = { ja: { whole: "教材全体", step: "段階" }, en: { whole: "whole lesson", step: "step" } };
+
+/**
+ * The text shown for an activity's step: its `label` (display text the editor wrote, e.g.
+ * 「4 枚目『XML の壁』・段階 1」) if it has one; "*" is the whole lesson; otherwise the key itself,
+ * as "s-xxx · 段階 1" when it reads as "<slide>:<k>" with a number k (0-based in the key, 1-based here).
+ * Only ever shown with textContent.
+ */
+export function stepText(step, label, lang = "ja") {
+  const W = STEP_WORDS[lang === "en" ? "en" : "ja"];
+  if (typeof label === "string" && label.trim()) return label.trim();
+  if (step === "*") return W.whole;
+  const s = String(step || ""), i = s.lastIndexOf(":");
+  if (i > 0) {
+    const slide = s.slice(0, i), k = s.slice(i + 1);
+    return `${slide} · ${W.step} ${/^\d+$/.test(k) ? Number(k) + 1 : k}`;
+  }
+  return s;
+}
+
 /**
  * From the room's activities: the Q&A to send questions to, and every poll with its step key.
  * There is no deck position on this page and the protocol has no notion of an "open" poll, so all polls
- * the room declares are listed, in declaration order, each labelled with its prompt and step key.
+ * the room declares are listed, in declaration order, each labelled with its prompt and its step (the
+ * activity's `label` if it has one, see stepText).
  * Polls without choices (inferred from votes, when the teacher set no activities) cannot be shown.
  * If the room declares nothing, any activity id is accepted, so questions go to "qa" under "*".
  */
@@ -137,7 +158,8 @@ export function viewOf(activities, declared) {
       if (!a || typeof a.id !== "string") continue;
       if (a.kind === "qa" && (!qa || (step === "*" && qa.step !== "*"))) qa = { id: a.id, step };
       if (a.kind === "poll" && Array.isArray(a.choices) && a.choices.length >= 2) {
-        polls.push({ id: a.id, step, prompt: typeof a.prompt === "string" ? a.prompt : "", choices: a.choices.filter((c) => typeof c === "string") });
+        polls.push({ id: a.id, step, prompt: typeof a.prompt === "string" ? a.prompt : "", choices: a.choices.filter((c) => typeof c === "string"),
+          ...(typeof a.label === "string" && a.label ? { label: a.label } : {}) });
       }
     }
   }

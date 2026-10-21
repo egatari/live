@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Egatari Live teacher page. Plain JS, no framework. Every learner-provided string is shown with textContent.
-import { joinUrl } from "/join-core.js";
+import { joinUrl, stepText } from "/join-core.js";
 
 (function () {
   const T = {
@@ -276,7 +276,7 @@ import { joinUrl } from "/join-core.js";
   function renderPolls() {
     const st = S.state, box = $("polls");
     const defs = {};
-    for (const list of Object.values(st.activities || {})) for (const a of list) if (a.kind === "poll") defs[a.id] = a;
+    for (const [step, list] of Object.entries(st.activities || {})) for (const a of list) if (a.kind === "poll") defs[a.id] = { ...a, step };
     const ids = [...new Set([...Object.keys(defs), ...Object.keys(st.tallies || {})])];
     if (!ids.length) { box.replaceChildren(el("p", { class: "muted", text: t("noPolls") })); return; }
     box.replaceChildren(...ids.map((id) => {
@@ -292,6 +292,8 @@ import { joinUrl } from "/join-core.js";
       }
       return el("div", { class: "poll" },
         el("p", {}, el("strong", { text: d.prompt || id }), el("span", { class: "muted", text: ` (${tl.total} ${t("votes")})` })),
+        // where the poll is: its label (text only), the step key in the tooltip
+        d.step ? el("p", { class: "poll-step muted", title: `${d.step} · ${id}`, text: stepText(d.step, d.label, lang) }) : null,
         ...rows);
     }));
   }
