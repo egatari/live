@@ -183,8 +183,10 @@ export class Room extends DurableObject {
   }
 
   async create(spec) {
-    if (this.meta) return json({ v: 1, error: "exists" }, 409);
+    // Hash first: between the check for an existing room and taking the id there must be no await, so that two
+    // creates of the same id (a one-way setup chooses its id) cannot both pass the check.
     const adminHash = await sha256(spec.adminKey);
+    if (this.meta) return json({ v: 1, error: "exists" }, 409);
     this.meta = {
       room: spec.room, key: spec.key, keyGen: 1, adminHash, window: spec.window, graceHours: spec.graceHours,
       requireApproval: spec.requireApproval, open: true, activities: spec.activities, seen: {}, size: spec.size,

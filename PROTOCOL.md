@@ -4,7 +4,7 @@ This document defines the wire protocol between an Egatari player (the learner's
 
 | File | Contents |
 |---|---|
-| `protocol/schema.json` | JSON Schema (2020-12). Entry points: `#/$defs/learnerToServer`, `serverToLearner`, `teacherToServer`, `serverToTeacher`, `createRequest`, `createResponse`, `results`, `httpError`. |
+| `protocol/schema.json` | JSON Schema (2020-12). Entry points: `#/$defs/learnerToServer`, `serverToLearner`, `teacherToServer`, `serverToTeacher`, `createRequest`, `createResponse`, `setupPayload`, `results`, `httpError`. |
 | `protocol/close-codes.json` | Close codes with names, meaning and whether a player may retry. |
 | `protocol/fixtures/**.json` | One example per message type and HTTP body. Every fixture validates against the schema (checked by `npm test`). |
 
@@ -20,8 +20,9 @@ This document defines the wire protocol between an Egatari player (the learner's
 
 | Name | Format | Made by |
 |---|---|---|
-| `room` | `r-` + 8 base32 characters (`a-z`, `2-7`), 40 bits | service |
-| `key` (learner capability) | base64url, 22 characters (128 bits) | service; goes into the exported play-only file |
+| `room` | `r-` + 8 base32 characters (`a-z`, `2-7`), 40 bits | service, or the editor in a one-way setup (§2.1, derived from `setup`) |
+| `key` (learner capability) | base64url, 22 characters (128 bits) | service, or the editor in a one-way setup (§2.1, derived from `setup`); goes into the exported play-only file |
+| `setup` (one-way setup secret) | base64url, 43 characters (32 random bytes, 256 bits) | the editor, with a cryptographic random source; only in the setup string the host pastes once, never in a file, never stored by the service |
 | `adminKey` (teacher key) | base64url, 43 characters (256 bits) | service; shown once, kept in the teacher page's fragment, never in a file |
 | `pid` (participant id) | 16–43 characters of `[A-Za-z0-9_-]` | the learner's device, at random (e.g. 16 random bytes, base64url), kept in `localStorage` per room |
 | step key | `slideKey:stepKey` as in the format spec, or `*` | the lesson |
@@ -37,16 +38,16 @@ All JSON responses carry `cache-control: no-store`. No endpoint sets CORS header
 
 | Method and path | Auth | Body / reply |
 |---|---|---|
-| `GET /` | none | The create page (HTML, en/ja). The only page that loads Cloudflare Turnstile. |
+| `GET /` | none | The create page (HTML, en/ja). The only page that loads Cloudflare Turnstile. It takes a setup string from the editor (§2.1) or, as before, the room's settings typed in. Its own resources: `/teacher.js`, `/teacher.css`, `/join-core.js`, `/setup-core.js`. |
 | `GET /room` | none (the teacher key is in the fragment) | The room page (teacher dashboard). Its CSP allows no third party. `/teacher.js`, `/teacher.css` and `/join-core.js` are its only own resources. |
 | `GET /join` | none (room and learner key are in the fragment) | The learner join page (§7.1). Same CSP as `/room`. Its only resources are `/join.js`, `/join-core.js` and `/join.css`. |
-| `POST /api/rooms` | a Turnstile token in the body; `Origin`, if present, must be the service origin; 5 per minute per sender | `createRequest` → `201 createResponse`. Errors: `400` (`bad_request`, `window_too_long`, `room_too_large`, `turnstile_required`), `403` (`forbidden`: foreign Origin; `turnstile_failed`), `413`, `415`, `429` (`rate_limited`), `503` (`unavailable`: Turnstile or the limiter not configured, or siteverify unreachable). |
+| `POST /api/rooms` | a Turnstile token in the body; `Origin`, if present, must be the service origin; 5 per minute per sender | `createRequest` → `201 createResponse`. Errors: `400` (`bad_request`, `window_too_long`, `room_too_large`, `turnstile_required`), `403` (`forbidden`: foreign Origin; `turnstile_failed`), `409` (`room_exists`: one-way setup only), `413`, `415`, `429` (`rate_limited`), `503` (`unavailable`: Turnstile or the limiter not configured, or siteverify unreachable). |
 | `GET /api/rooms/{room}/results` | `Authorization: Bearer <adminKey>` | `200 results`; `401` without or with a wrong key; `404` when the room does not exist (or was deleted). |
 | `GET /api/health` | none | `{"v":1,"ok":true,"service":"egatari-live"}` |
 
 Errors are `httpError`: `{"v":1, "error": "<code>", "message": "..."}`.
 
-**Create.** `createRequest` is `{v, window: {from, to}, turnstile, size?, graceHours?, requireApproval?, activities?}`:
+**Create.** `createRequest` is `{v, window: {from, to}, turnstile, size?, graceHours?, requireApproval?, activities?}`, plus `{room, key, setup}` for a one-way setup (§2.1):
 
 - `turnstile`: the Cloudflare Turnstile token from the widget on the create page (action `create-room`). The service verifies it with siteverify after validating the rest of the request, so a malformed request does not spend the token. Each token works once.
 - `window.to` must be after `window.from` and in the future; at most **3 hours** long (`window_too_long`); it may start at most 180 days ahead.
@@ -55,6 +56,31 @@ Errors are `httpError`: `{"v":1, "error": "<code>", "message": "..."}`.
 - `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees. Kinds: `qa` (questions), `confused` (a one-tap "I don't follow", no text) and `poll`. Each activity may carry `label` (optional, at most 80 characters after trimming, whitespace runs folded to one space; `text_too_long` if longer): display text for where it is in the lesson, written by the editor (slide number, slide heading, step number). It is text only: keys and step keys stay as they are, the server never interprets it, and pages show it with `textContent`. An activity without a label is shown by its step key (`*` as "whole lesson"; `s-xxx:0` as `s-xxx · step 1`).
 
 `createResponse` returns `endpoint`, `room`, `key`, `adminKey`, the `window`, `graceHours`, `expiresAt` (= `window.to` + grace), `requireApproval` and `teacherUrl` = `<endpoint>/room#room=<room>&admin=<adminKey>`. The teacher page shows the link once and tells the teacher to bookmark it. There is no recovery: a teacher who loses it creates a new room.
+
+### 2.1 One-way setup from the editor
+
+The editor makes no network request (format spec live §4). Instead of copying a room's `room` and `key` from the service into the editor, the editor may choose them itself and give the host **one string** to paste once on the create page. This is the preferred way; the earlier way (the service chooses, the host copies the settings back) stays.
+
+**The setup secret and the ids.** The editor draws `setup` = 32 bytes from a cryptographic random source (`crypto.getRandomValues`), base64url without padding (43 characters). It derives:
+
+```
+room = "r-" + base32( SHA-256( UTF-8("egatari-live/v1/room:" + setup) )[0..5] )     // RFC 4648 alphabet, lowercase: 8 characters
+key  = base64url( SHA-256( UTF-8("egatari-live/v1/key:" + setup) )[0..16] )         // 22 characters
+```
+
+`room` and `key` go into the exported play-only file as usual; `setup` never does. Because the service creates a room from a one-way request only when `room` and `key` are the ones derived from `setup`, someone holding only a copy of the lesson file (for example a learner who received it before the host created the room) cannot create the room, and so cannot become its host. `protocol/fixtures/setup/payload.json` is a test vector (its `room` and `key` are derived from its `setup`).
+
+**The setup string** is `egatari-live-setup-v1:` followed by base64url (no padding) of the UTF-8 JSON of a `setupPayload`: `{v: 1, endpoint, room, key, setup, window, activities}` (all required; `activities` as in `extensions.live`, labels included). It carries the learner key and the setup secret, so the host treats it like the host link: it is for the create page only. Readers ignore whitespace inside it (mail and chat programs break long lines). The create page refuses a string whose `endpoint` is not its own origin.
+
+**The request.** The create page sends `createRequest` with `room`, `key` and `setup` from the string, its `window` and `activities`, the host's choices (`requireApproval`, `graceHours`) and the Turnstile token. The service:
+
+- requires `room`, `key` and `setup` together, and then `activities` (the room gets exactly that set; the activity limits apply as for any create);
+- checks their formats (`room` as above, `key` exactly 22 base64url characters, `setup` exactly 43 characters that are the canonical base64url of 32 bytes) and refuses a `setup` that is plainly not random (fewer than 16 distinct characters, or a run of 8 equal characters; random secrets fail this with p < 1e-10);
+- derives `room` and `key` from `setup` and compares them in constant time; any difference is `400 bad_request`;
+- only then verifies Turnstile (so a malformed or foreign request does not spend the token), under the same per-sender rate limit and Origin rule as every create;
+- creates the room with exactly that `room`, `key` and `activities` and a new `adminKey`, or answers **`409 room_exists`** when a room with that id exists. An existing room is never changed or handed over; the id is free again only after the room has deleted itself at the end of its grace period. The service does not store `setup`.
+
+`createResponse` is the same as for any create; its `room` and `key` equal the string's. The create page then opens the room page as usual (the host link is shown once) and tells the host that there is nothing to paste back into the editor.
 
 **Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa`, `confused` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text`, moderation flags (`read`, `answered`, `shown`, `hidden`) and, if present, `strokes` (the circled region), `sourceSha256`, `group` and `reply` (`{text, at, public}`); for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. A `confused` entry is a mark that was on at export (one per participant and step). `activities` keeps each activity's `label`. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
 
@@ -162,6 +188,7 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 | `turnstile_required` | create: no Turnstile token | — |
 | `turnstile_failed` | create: siteverify refused the token (invalid, expired, spent, wrong action or hostname) | — |
 | `unavailable` | create: Turnstile secret or limiter not configured, or siteverify unreachable (fails closed) | — |
+| `room_exists` | create (one-way setup, §2.1): a room with that id already exists; nothing is changed | — |
 
 **Close codes** (also in `protocol/close-codes.json`). "Retry" says whether a player may reconnect by itself (with backoff, still only inside the window).
 
@@ -204,7 +231,7 @@ v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to
 | teacher sockets | 4 | a laptop, a projector, a phone |
 | window | **≤ 3 h**, starting ≤ 180 days ahead | a 2-hour lesson plus an hour of slack |
 | grace for results | 0–168 h, default 24 h | time to download results |
-| room creation | 5 per 60 s per sender (Workers Rate Limiting binding, by `CF-Connecting-IP`), plus Turnstile | |
+| room creation | 5 per 60 s per sender (Workers Rate Limiting binding, by `CF-Connecting-IP`), plus Turnstile; the same for a one-way setup | |
 
 `welcome.limits` gives learners the ones a player needs to shape its UI.
 
@@ -242,6 +269,7 @@ https://live.egatari.org/join#room=<room>&key=<key>
 Egatari Live は、配った教材（再生専用のファイル）から、そのまま授業の Q&A と投票に参加するための通信の約束です。
 
 - **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから。Cloudflare Turnstile のトークンが要る。送り手ごとに 1 分 5 部屋まで。時間の窓は 3 時間まで（`window_too_long`）、人数の見込みは 60 人まで（`room_too_large`））。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
+- **エディタからの一方向の設定**（§2.1）：エディタ（Egatari Studio）は通信しない。エディタが 32 バイトの乱数 `setup` を作り、そこから `room` と `key` を SHA-256 で導き、`egatari-live-setup-v1:` で始まる 1 本の文字列（`{v, endpoint, room, key, setup, window, activities}` の JSON を base64url にしたもの）をホストに渡す。ホストはそれを部屋を作るページに 1 回だけ貼り、Turnstile の確認を通す。サービスは `room` と `key` が `setup` から導いたものと一致するとき（比べるのは一定時間）だけ、その `room`・`key`・活動のとおりに部屋を作る。同じ id の部屋があれば `409 room_exists` で断り、既にある部屋は変えない。教材ファイル（`room` と `key` だけ入っていて `setup` はない）を持っているだけでは部屋を作れない。前からのやり方（サービスが id を選び、ホストが設定を Studio に貼り戻す）も残る。
 - **参加用のページ**：教材のファイルからつながらない端末（スマートフォンのチャットのアプリの中のブラウザ、ファイルを見るだけのアプリなど）のために、`/join#room=…&key=…` のリンクを教員のページに出す。部屋と鍵は `#` の後ろにだけあり、サーバーには送られない。送るもの・決まり・つなぎ直し方は再生アプリと同じ。投票は、部屋にあるものをすべて、段階の表示（活動の `label`。なければ段階の鍵。`*` は「教材全体」）と一緒に出す（このページには今の段階がなく、通信の約束にも「いま開いている投票」がないため）。部屋の活動は、新しい `activities` の問い合わせで受け取る（§7.1）。
 - **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
 - **活動の表示名**：活動（`qa`・`poll`）は任意で `label`（80 字まで。例「4 枚目『XML の壁』・段階 1」）を持てる。編集アプリが活動を作るときに書く表示のための字で、鍵や段階の鍵はそのまま。教員のページと参加用のページは、段階の鍵の代わりにこれを出し（鍵は title の吹き出し）、結果の JSON の `activities` にも残る。`label` のない古い活動は段階の鍵（「s-xxx · 段階 1」）で出す。

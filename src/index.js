@@ -2,7 +2,7 @@
 // Egatari Live Worker: routing, room creation, and the teacher page's security headers.
 import * as L from "./limits.js";
 import {
-  CLOSE, ERR, ProtocolError, RE_ROOM, checkCreate, newRoomId, newLearnerKey, newAdminKey,
+  CLOSE, ERR, ProtocolError, RE_ROOM, checkCreate, newRoomId, newLearnerKey, newAdminKey, setupIds, sameDigest,
 } from "./protocol.js";
 import { rejectSocket } from "./room.js";
 import { verifyTurnstile } from "./turnstile.js";
@@ -81,24 +81,43 @@ async function createRoom(request, env, origin) {
   } catch (e) {
     return fail(400, e instanceof ProtocolError ? e.code : ERR.BAD_REQUEST, e instanceof ProtocolError ? e.message : "body is not JSON");
   }
+  // One-way setup (PROTOCOL.md §2.1): the room and key must be the ones derived from the setup secret, so that a copy of
+  // the lesson file (which carries room and key, never the secret) cannot be used to create, and so control, its room.
+  if (spec.setup) {
+    const ids = await setupIds(spec.setup.setup);
+    const roomOk = sameDigest(ids.room, spec.setup.room), keyOk = sameDigest(ids.key, spec.setup.key);
+    if (!(roomOk & keyOk)) return fail(400, ERR.BAD_REQUEST, "room and key do not belong to this setup");
+  }
   // Turnstile, verified last so that a malformed request does not spend the learner's token
   if (typeof token !== "string" || !token || token.length > L.MAX_TURNSTILE_TOKEN_CHARS) {
     return fail(400, ERR.TURNSTILE_REQUIRED, "a Turnstile token is required");
   }
   const v = await verifyTurnstile(env, token, ip, { expectedHostname: new URL(origin).hostname });
   if (!v.ok) return fail(v.status, v.status === 503 ? ERR.UNAVAILABLE : ERR.TURNSTILE_FAILED, "Turnstile: " + v.reason);
+  const { setup, ...roomSpec } = spec;
+  const created = (room, key, adminKey, expiresAt) => json({
+    v: 1, endpoint: origin, room, key, adminKey, window: spec.window, graceHours: spec.graceHours, expiresAt,
+    requireApproval: spec.requireApproval,
+    teacherUrl: `${origin}/room#room=${room}&admin=${adminKey}`,
+  }, 201);
+  if (setup) {
+    // Exactly this room and key; never another id, and never an existing room (no way to take one over).
+    const adminKey = newAdminKey();
+    const res = await stub(env, setup.room).fetch("https://do/do/create", {
+      method: "POST", body: JSON.stringify({ ...roomSpec, room: setup.room, key: setup.key, adminKey }),
+    });
+    if (res.status === 409) return fail(409, ERR.ROOM_EXISTS, "this Live already exists; make a new one in the editor");
+    const { expiresAt } = await res.json();
+    return created(setup.room, setup.key, adminKey, expiresAt);
+  }
   for (let attempt = 0; attempt < 4; attempt++) {
     const room = newRoomId(), key = newLearnerKey(), adminKey = newAdminKey();
     const res = await stub(env, room).fetch("https://do/do/create", {
-      method: "POST", body: JSON.stringify({ ...spec, room, key, adminKey }),
+      method: "POST", body: JSON.stringify({ ...roomSpec, room, key, adminKey }),
     });
     if (res.status === 409) continue;   // id collision: try another
     const { expiresAt } = await res.json();
-    return json({
-      v: 1, endpoint: origin, room, key, adminKey, window: spec.window, graceHours: spec.graceHours, expiresAt,
-      requireApproval: spec.requireApproval,
-      teacherUrl: `${origin}/room#room=${room}&admin=${adminKey}`,
-    }, 201);
+    return created(room, key, adminKey, expiresAt);
   }
   return fail(503, ERR.ROOM_LIMIT, "could not allocate a room id");
 }

@@ -44,7 +44,9 @@ For tests and offline development the server answers Cloudflare's documented Tur
 
 ## Using it
 
-1. Open the service page (`https://live.egatari.org/`), set the live time (start and end, up to 3 hours), choose **Use a waiting room** if only people you admit may join, pass the check, and **Create Live**.
+1. **Recommended, one way:** in Egatari Studio's **Distribute with Live (questions and polls)…**, make the Live ID and join code there, set the live time and the questions and polls, and copy the one string it shows. Open the service page (`https://live.egatari.org/`), paste the string once, pass the check and **Create this Live** (then step 2; skip step 3: there is nothing to paste back, and the file you export from Studio already carries the join code). Studio itself never connects to the service. The string holds a setup secret that is not in the lesson file, so a copy of the file alone cannot be used to create the Live (PROTOCOL.md §2.1).
+
+   **The earlier way:** open the service page, under **Create without a string from Egatari Studio** set the live time (start and end, up to 3 hours), choose **Use a waiting room** if only people you admit may join, pass the check, and **Create Live**.
 2. **Bookmark the host link** that appears (`…/room#room=…&admin=…`). It is shown once; if it is lost, create a new Live.
 3. Copy **Settings to paste into Egatari Studio** (server, Live ID, join code, live time) into Egatari Studio's **Distribute with Live (questions and polls)…**, and export the Egatari file (play only). When you hand it out, paste the **Text to share** (Copy button on the room page, in the page's language) next to the file: computers download the file and open it in a browser, phones and tablets open the join link (iPhone and iPad cannot run a downloaded HTML file; chat apps such as Slack may not preview a large file).
 4. During the lesson, keep the host page open: **End Live** or **Reopen Live**, admit participants from the waiting room (**Admit**, **Decline**, **Admit all**), mark questions read, answered, show to everyone or hidden, group similar questions and send a short reply (to the askers only, or also to all participants), watch poll tallies and the "I don't follow" count per step.
@@ -119,7 +121,9 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 
 ### 使い方
 
-1. サービスのページでライブの時間（開始と終了。3 時間まで）を決め、ホストが許可した人だけにするなら「待機室を使う」をオンにし、確認を済ませて「ライブを作る」。
+1. **おすすめ（一方向）**：Egatari Studio の「ライブ（質問・投票）を付けて配る…」でライブ ID と参加コードを作り、ライブの時間と質問・投票を決めて、出てくる 1 本の文字列をコピーする。サービスのページにその文字列を 1 回だけ貼り、確認を済ませて「このライブを作る」（このあと 2. へ。3. の貼り戻しは要らない。Studio で書き出すファイルには参加コードがもう入っている）。Studio 自体はサービスに接続しない。文字列には教材ファイルに入らない秘密の値が入っているので、ファイルを持っているだけではそのライブを作れない（PROTOCOL.md §2.1）。
+
+   **前からの方法**：サービスのページの「Egatari Studio の文字列を使わずに作る」でライブの時間（開始と終了。3 時間まで）を決め、ホストが許可した人だけにするなら「待機室を使う」をオンにし、確認を済ませて「ライブを作る」。
 2. 表示されるホスト用リンク（`…/room#room=…&admin=…`）を**すぐブックマークする**。一度しか表示されず、なくしたらライブを作り直す。
 3. 「Egatari Studio に貼る設定」（接続先・ライブ ID・参加コード・ライブの時間）を Egatari Studio の「ライブ（質問・投票）を付けて配る…」に貼り、Egatari ファイル（再生のみ）を書き出す。
 4. 授業中はホストのページを開いておく：「ライブを終える」「ライブを再開」、待機室の「許可」「許可しない」「全員を許可」、質問の「既読・回答済み・全員に表示・非表示」、似た質問をまとめる、短い返事（質問した人にだけ、または参加者全員にも）、投票の集計、ステップごとの「わからない」の人数。

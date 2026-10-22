@@ -13,7 +13,8 @@ import {
 const fixtures = import.meta.glob("../protocol/fixtures/**/*.json", { eager: true, import: "default" });
 const FIXTURE_DEF = {
   learner: "learnerToServer", "server-learner": "serverToLearner", teacher: "teacherToServer", "server-teacher": "serverToTeacher",
-  "http/create-request": "createRequest", "http/create-response": "createResponse", "http/results": "results", "http/error": "httpError",
+  "http/create-request": "createRequest", "http/create-request-setup": "createRequest", "http/create-response": "createResponse", "http/results": "results", "http/error": "httpError",
+  setup: "setupPayload",
 };
 const defFor = (path) => {
   const rel = path.replace("../protocol/fixtures/", "").replace(/\.json$/, "");

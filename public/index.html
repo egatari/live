@@ -21,19 +21,43 @@
   <section id="create" hidden>
     <h2 data-i18n="createTitle"></h2>
     <p data-i18n="createIntro"></p>
-    <form id="create-form">
-      <label><span data-i18n="from"></span> <input type="datetime-local" id="from" required></label>
-      <label><span data-i18n="to"></span> <input type="datetime-local" id="to" required></label>
-      <label><span data-i18n="grace"></span> <input type="number" id="grace" min="0" max="168" step="1" value="24"></label>
-      <label class="check"><input type="checkbox" id="approval"> <span data-i18n="requireApproval"></span></label>
-      <label class="block"><span data-i18n="activitiesOpt"></span>
-        <textarea id="activities" rows="5" spellcheck="false" placeholder='{"*":[{"id":"qa","kind":"qa"}]}'></textarea></label>
-      <label><span data-i18n="size"></span> <input type="number" id="size" min="1" max="60" step="1" value="40"></label>
-      <div id="turnstile" class="turnstile"></div>
-      <p class="muted" id="turnstile-note" hidden data-i18n="turnstileDev"></p>
-      <button type="submit" id="create-btn" data-i18n="createBtn"></button>
-      <p class="error" id="create-error" role="alert"></p>
+    <div id="turnstile" class="turnstile"></div>
+    <p class="muted" id="turnstile-note" hidden data-i18n="turnstileDev"></p>
+
+    <!-- One-way setup: paste the string from Egatari Studio once (preferred) -->
+    <form id="setup-form">
+      <h3 data-i18n="setupTitle"></h3>
+      <p data-i18n="setupIntro"></p>
+      <label class="block"><span data-i18n="setupLabel"></span>
+        <textarea id="setup-string" rows="4" spellcheck="false" autocomplete="off" placeholder="egatari-live-setup-v1:…"></textarea></label>
+      <div id="setup-preview" class="preview" hidden>
+        <p><strong data-i18n="room"></strong> <code id="setup-room"></code></p>
+        <p><strong data-i18n="window"></strong> <span id="setup-window"></span></p>
+        <p><strong data-i18n="setupActs"></strong> <span id="setup-acts"></span></p>
+      </div>
+      <p class="error" id="setup-check" role="status"></p>
+      <label><span data-i18n="grace"></span> <input type="number" id="setup-grace" min="0" max="168" step="1" value="24"></label>
+      <label class="check"><input type="checkbox" id="setup-approval"> <span data-i18n="requireApproval"></span></label>
+      <button type="submit" id="setup-btn" data-i18n="setupBtn"></button>
+      <p class="error" id="setup-error" role="alert"></p>
     </form>
+
+    <!-- The earlier way: create the room here, then copy its settings into Egatari Studio -->
+    <details id="manual">
+      <summary data-i18n="manualTitle"></summary>
+      <p class="muted" data-i18n="manualIntro"></p>
+      <form id="create-form">
+        <label><span data-i18n="from"></span> <input type="datetime-local" id="from" required></label>
+        <label><span data-i18n="to"></span> <input type="datetime-local" id="to" required></label>
+        <label><span data-i18n="grace"></span> <input type="number" id="grace" min="0" max="168" step="1" value="24"></label>
+        <label class="check"><input type="checkbox" id="approval"> <span data-i18n="requireApproval"></span></label>
+        <label class="block"><span data-i18n="activitiesOpt"></span>
+          <textarea id="activities" rows="5" spellcheck="false" placeholder='{"*":[{"id":"qa","kind":"qa"}]}'></textarea></label>
+        <label><span data-i18n="size"></span> <input type="number" id="size" min="1" max="60" step="1" value="40"></label>
+        <button type="submit" id="create-btn" data-i18n="createBtn"></button>
+        <p class="error" id="create-error" role="alert"></p>
+      </form>
+    </details>
   </section>
 
 </main>

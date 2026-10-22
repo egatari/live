@@ -2,6 +2,7 @@
 // Egatari Live teacher page. Plain JS, no framework. Every learner-provided string is shown with textContent.
 import { joinUrl, stepText } from "/join-core.js";
 import { shareText } from "/join-core.js";
+import { parseSetupString, setupRequest, setupSummary } from "/setup-core.js";
 
 (function () {
   const T = {
@@ -50,6 +51,21 @@ import { shareText } from "/join-core.js";
       err_window_too_long: "The live time is at most 3 hours. Change the start and end.", err_room_too_large: "A room holds at most 60 learners.",
       err_rate_limited: "Many rooms are being created from this network right now. Please wait a minute and try again.",
       err_turnstile_failed: "The check failed. Please try again.", err_turnstile_required: "Please complete the check first.",
+      setupTitle: "Create from the string copied in Egatari Studio (recommended)",
+      setupIntro: "Paste, once, the string you copied in Egatari Studio under Distribute with Live (questions and polls). It already holds the Live ID, the join code, the live time and the questions and polls, so there is nothing else to fill in, and nothing to paste back into Egatari Studio afterwards.",
+      setupLabel: "String copied in Egatari Studio", setupActs: "Accepts", setupBtn: "Create this Live",
+      actsQa: "questions", actsConfused: "“I don't follow”", actsPolls: (n) => `${n} ${n === 1 ? "poll" : "polls"}`, actsNone: "nothing",
+      setup_empty: "Paste the string first.",
+      setup_prefix: "This is not a string copied in Egatari Studio (it starts with egatari-live-setup-v1:).",
+      setup_decode: "The string is cut off or damaged. Copy it again in Egatari Studio.",
+      setup_shape: "The string is cut off or damaged. Copy it again in Egatari Studio.",
+      setup_endpoint: (ep) => `This string is for the Live service at ${ep}. Paste it on that page.`,
+      setup_past: "The live time is already over. Change it in Egatari Studio and copy the string again.",
+      setup_bad: "The string was not accepted: ",
+      err_room_exists: "This Live already exists. Open it with the host link you bookmarked when it was created. If you lost the link, make a new Live ID and join code in Egatari Studio and export the lesson again.",
+      manualTitle: "Create without a string from Egatari Studio (the earlier way)",
+      manualIntro: "Set the live time and polls here, create the Live, then copy its “Settings to paste into Egatari Studio” back into Egatari Studio.",
+      createdStudio: "The file you export from Egatari Studio already carries this Live's join code. There is nothing to paste back into Egatari Studio.",
     },
     ja: {
       createTitle: "ライブを作る（授業中の質問と投票）",
@@ -96,6 +112,21 @@ import { shareText } from "/join-core.js";
       err_window_too_long: "ライブの時間は 3 時間までです。開始と終了を直してください。", err_room_too_large: "1 部屋は 60 人までです。",
       err_rate_limited: "同じネットワークから、いま部屋がたくさん作られています。1 分ほど待ってから、もう一度作ってください。",
       err_turnstile_failed: "確認に失敗しました。もう一度お試しください。", err_turnstile_required: "先に確認を済ませてください。",
+      setupTitle: "Egatari Studio の文字列を貼って作る（おすすめ）",
+      setupIntro: "Egatari Studio の「ライブ（質問・投票）を付けて配る」でコピーした文字列を、ここに 1 回だけ貼ります。ライブ ID・参加コード・ライブの時間・質問・投票の設定がすべて入っているので、ほかに入れるものはありません。作ったあとで Egatari Studio に何かを貼り戻す必要もありません。",
+      setupLabel: "Egatari Studio でコピーした文字列", setupActs: "受け付けるもの", setupBtn: "このライブを作る",
+      actsQa: "質問", actsConfused: "「わからない」", actsPolls: (n) => `投票 ${n} 件`, actsNone: "なし",
+      setup_empty: "先に文字列を貼ってください。",
+      setup_prefix: "Egatari Studio でコピーした文字列ではありません（egatari-live-setup-v1: で始まる文字列です）。",
+      setup_decode: "文字列が途中で切れているか、壊れています。Egatari Studio でもう一度コピーしてください。",
+      setup_shape: "文字列が途中で切れているか、壊れています。Egatari Studio でもう一度コピーしてください。",
+      setup_endpoint: (ep) => `この文字列は ${ep} のライブのためのものです。そちらのページに貼ってください。`,
+      setup_past: "ライブの時間がもう過ぎています。Egatari Studio でライブの時間を直して、文字列をコピーし直してください。",
+      setup_bad: "文字列を受け付けられませんでした：",
+      err_room_exists: "このライブはもう作られています。作ったときにブックマークしたホスト用リンクから開いてください。リンクをなくしたときは、Egatari Studio で新しいライブ ID と参加コードを作り、教材を書き出し直してください。",
+      manualTitle: "Egatari Studio の文字列を使わずに作る（前からの方法）",
+      manualIntro: "ライブの時間や投票をここで決めてライブを作り、できたページの「Egatari Studio に貼る設定」を Egatari Studio に貼り戻す方法です。",
+      createdStudio: "Egatari Studio で書き出すファイルには、このライブの参加コードがもう入っています。Egatari Studio に設定を貼り戻す必要はありません。",
     },
   };
   let lang = "en";
@@ -121,6 +152,7 @@ import { shareText } from "/join-core.js";
     for (const n of document.querySelectorAll("[data-i18n]")) n.textContent = t(n.dataset.i18n);
     $("lang").textContent = lang === "ja" ? "English" : "日本語";
     if (S.state) render();
+    if (document.body.dataset.page === "create" && $("setup-string")) checkSetup();
   }
 
   // ------------------------------------------------------------- state
@@ -165,8 +197,58 @@ import { shareText } from "/join-core.js";
     if (TS.id !== null && window.turnstile) { window.turnstile.reset(TS.id); TS.token = null; }
   }
 
+  // ------------------------------------------------------------- one-way setup (the string from Egatari Studio)
+  function setupProblem(text) {
+    let p;
+    try { p = parseSetupString(text); } catch (e) { return { msg: t("setup_" + (e.code || "decode")) }; }
+    if (p.endpoint !== location.origin) return { msg: t("setup_endpoint")(p.endpoint) };
+    if (Date.parse(p.window.to) <= Date.now()) return { p, msg: t("setup_past") };
+    return { p, msg: "" };
+  }
+  function checkSetup() {
+    const text = $("setup-string").value;
+    const { p, msg } = text.trim() ? setupProblem(text) : { msg: "" };
+    $("setup-check").textContent = msg;
+    $("setup-preview").hidden = !p;
+    if (!p) return null;
+    $("setup-room").textContent = p.room;
+    $("setup-window").textContent = `${fmt(p.window.from)} – ${fmt(p.window.to)}`;
+    const sum = setupSummary(p);
+    const parts = [sum.qa && t("actsQa"), sum.confused && t("actsConfused"), sum.polls && t("actsPolls")(sum.polls)].filter(Boolean);
+    $("setup-acts").textContent = parts.length ? parts.join(lang === "ja" ? "・" : ", ") : t("actsNone");
+    return msg ? null : p;
+  }
+  function errorText(out, status, oneWay) {
+    if (oneWay && out.error === "bad_request") return t("setup_bad") + (out.message || out.error);
+    const known = T.en["err_" + out.error] ? t("err_" + out.error) : null;
+    return known || out.message || out.error || String(status);
+  }
+  async function postCreate(body, errBox, oneWay) {
+    const res = await fetch("/api/rooms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      errBox.textContent = errorText(out, res.status, oneWay);
+      resetTurnstile();
+      return;
+    }
+    // The teacher key goes only into the fragment of the room page; replace() keeps it out of history here.
+    location.replace(`/room#room=${out.room}&admin=${out.adminKey}&new=${oneWay ? "studio" : "1"}`);
+  }
+
   function showCreate() {
     $("create").hidden = false;
+    $("setup-string").addEventListener("input", checkSetup);
+    $("setup-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      $("setup-error").textContent = "";
+      const text = $("setup-string").value;
+      if (!text.trim()) { $("setup-error").textContent = t("setup_empty"); return; }
+      const p = checkSetup();
+      if (!p) { $("setup-error").textContent = $("setup-check").textContent; return; }
+      if (!TS.token) { $("setup-error").textContent = t("turnstileWait"); return; }
+      const body = setupRequest(p, { turnstile: TS.token, requireApproval: $("setup-approval").checked, graceHours: Number($("setup-grace").value || 24) });
+      await postCreate(body, $("setup-error"), true);
+    });
     loadTurnstile();
     const now = new Date(); now.setSeconds(0, 0);
     $("from").value = localInput(now);
@@ -180,16 +262,7 @@ import { shareText } from "/join-core.js";
       if ($("size").value) body.size = Number($("size").value);
       const a = $("activities").value.trim();
       if (a) { try { body.activities = JSON.parse(a); } catch { $("create-error").textContent = t("badJson"); return; } }
-      const res = await fetch("/api/rooms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      const out = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const known = T.en["err_" + out.error] ? t("err_" + out.error) : null;
-        $("create-error").textContent = known || out.message || out.error || String(res.status);
-        resetTurnstile();
-        return;
-      }
-      // The teacher key goes only into the fragment of the room page; replace() keeps it out of history here.
-      location.replace(`/room#room=${out.room}&admin=${out.adminKey}&new=1`);
+      await postCreate(body, $("create-error"), false);
     });
   }
 
@@ -197,6 +270,7 @@ import { shareText } from "/join-core.js";
     const clean = `${location.origin}/room#room=${S.room}&admin=${S.admin}`;
     history.replaceState(null, "", clean);
     $("created").hidden = false;
+    $("created-studio").hidden = hash.get("new") !== "studio";
     $("teacher-link").href = clean;
     $("teacher-link").textContent = clean;
     $("copy-link").addEventListener("click", () => copy(clean));
@@ -468,7 +542,7 @@ import { shareText } from "/join-core.js";
       if (S.room && S.admin) { location.replace("/room" + location.hash); return; }
       showCreate();
     } else if (S.room && S.admin) {
-      if (hash.get("new") === "1") showCreated();
+      if (hash.get("new") === "1" || hash.get("new") === "studio") showCreated();
       startDash();
     } else {
       location.replace("/");

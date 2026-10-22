@@ -48,11 +48,15 @@ export const ERR = Object.freeze({
   TURNSTILE_REQUIRED: "turnstile_required",
   TURNSTILE_FAILED: "turnstile_failed",
   UNAVAILABLE: "unavailable",
+  ROOM_EXISTS: "room_exists",     // one-way setup: a room with that id already exists
 });
 
 export const RE_ROOM = /^r-[a-z2-7]{8}$/;
 export const RE_KEY = /^[A-Za-z0-9_-]{22,64}$/;
 export const RE_ADMIN = /^[A-Za-z0-9_-]{43,64}$/;
+// One-way setup secret (PROTOCOL.md §2.1): 32 random bytes, base64url without padding, canonical
+// (the last character carries 4 bits and two zero bits).
+export const RE_SETUP = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 export const RE_PID = /^[A-Za-z0-9_-]{16,43}$/;
 export const RE_ACTIVITY = /^[A-Za-z0-9_-]{1,32}$/;
 export const RE_ITEM = /^q-[a-z2-7]{10}$/;
@@ -77,6 +81,46 @@ export function randomBase64url(nBytes) {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** base32 (RFC 4648 alphabet, lowercase, no padding) of whole 5-byte groups. */
+function base32(bytes) {
+  let s = "";
+  for (let i = 0; i + 5 <= bytes.length; i += 5) {
+    let v = 0n;
+    for (let j = 0; j < 5; j++) v = (v << 8n) | BigInt(bytes[i + j]);
+    for (let j = 7; j >= 0; j--) s += B32[Number((v >> BigInt(j * 5)) & 31n)];
+  }
+  return s;
+}
+function base64url(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function digest(label, setup) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(label + setup)));
+}
+
+/**
+ * One-way setup (PROTOCOL.md §2.1): the room and the learner key the editor derives from its setup secret.
+ * room = "r-" + base32(SHA-256("egatari-live/v1/room:" + setup)[0..5]), key = base64url(SHA-256("egatari-live/v1/key:" + setup)[0..16]).
+ * Whoever holds only the lesson file (room and key) cannot create its room: that needs the setup secret.
+ */
+export async function setupIds(setup) {
+  const room = "r-" + base32((await digest("egatari-live/v1/room:", setup)).slice(0, 5));
+  const key = base64url((await digest("egatari-live/v1/key:", setup)).slice(0, 16));
+  return { room, key };
+}
+
+/**
+ * A rough check that a setup secret came from a random source: 43 base64url characters drawn at random have about
+ * 31 distinct characters; fewer than 16 (or a run of 6 equal characters) does not happen by chance (p < 1e-9).
+ */
+export function setupLooksRandom(setup) {
+  if (typeof setup !== "string" || !RE_SETUP.test(setup)) return false;
+  if (new Set(setup).size < 16) return false;
+  return !/(.)\1{7}/.test(setup);
 }
 
 export const newRoomId = () => "r-" + randomBase32(8);
@@ -330,7 +374,7 @@ export function checkActivities(a) {
 /** Validate the create-room request body. Returns {window, graceHours, requireApproval, activities}. */
 export function checkCreate(body, now) {
   if (!isObj(body)) throw new ProtocolError(ERR.BAD_REQUEST, "body must be a JSON object");
-  if (!only(body, ["v", "window", "graceHours", "requireApproval", "activities", "size", "turnstile"])) throw new ProtocolError(ERR.BAD_REQUEST, "unexpected member");
+  if (!only(body, ["v", "window", "graceHours", "requireApproval", "activities", "size", "turnstile", "room", "key", "setup"])) throw new ProtocolError(ERR.BAD_REQUEST, "unexpected member");
   if (body.v !== undefined && body.v !== L.PROTOCOL_VERSION) throw new ProtocolError(ERR.UNSUPPORTED_VERSION);
   const w = body.window;
   if (!isObj(w) || !only(w, ["from", "to"]) || typeof w.from !== "string" || typeof w.to !== "string"
@@ -356,6 +400,18 @@ export function checkCreate(body, now) {
     if (body.size > L.MAX_ROOM_SIZE) throw new ProtocolError(ERR.ROOM_TOO_LARGE, `a room holds at most ${L.MAX_ROOM_SIZE} learners`);
     size = body.size;
   }
+  // One-way setup (§2.1): room, key and setup come together, and then the activities are required (the room gets exactly them).
+  const oneWay = ["room", "key", "setup"].filter((k) => body[k] !== undefined);
+  let setup = null;
+  if (oneWay.length) {
+    if (oneWay.length !== 3) throw new ProtocolError(ERR.BAD_REQUEST, "room, key and setup come together");
+    if (typeof body.room !== "string" || !RE_ROOM.test(body.room)) throw new ProtocolError(ERR.BAD_REQUEST, "room must be r- and 8 base32 characters");
+    if (typeof body.key !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(body.key)) throw new ProtocolError(ERR.BAD_REQUEST, "key must be 22 base64url characters");
+    if (typeof body.setup !== "string" || !RE_SETUP.test(body.setup)) throw new ProtocolError(ERR.BAD_REQUEST, "setup must be 43 base64url characters (32 random bytes)");
+    if (!setupLooksRandom(body.setup)) throw new ProtocolError(ERR.BAD_REQUEST, "setup is not random");
+    if (body.activities === undefined) throw new ProtocolError(ERR.BAD_REQUEST, "a one-way setup carries the activities");
+    setup = { room: body.room, key: body.key, setup: body.setup };
+  }
   const activities = body.activities === undefined ? null : checkActivities(body.activities);
-  return { window: { from: w.from, to: w.to }, graceHours, requireApproval: body.requireApproval === true, activities, size };
+  return { window: { from: w.from, to: w.to }, graceHours, requireApproval: body.requireApproval === true, activities, size, setup };
 }
