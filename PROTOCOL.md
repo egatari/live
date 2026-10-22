@@ -28,6 +28,8 @@ This document defines the wire protocol between an Egatari player (the learner's
 | activity id | 1–32 characters of `[A-Za-z0-9_-]` | the lesson |
 | activity label (optional) | up to 80 characters of display text, e.g. `Slide 4 'XML の壁', step 1` | the editor, when it creates the activity |
 | item id | `q-` + 10 base32 characters | service |
+| group id | `g-` + 10 base32 characters | service (the host groups similar questions) |
+| `sourceSha256` | 64 lowercase hex digits | the lesson (format spec §3.4); a play-only file carries it in `extensions.live` |
 
 ## 2. HTTP endpoints
 
@@ -50,11 +52,11 @@ Errors are `httpError`: `{"v":1, "error": "<code>", "message": "..."}`.
 - `window.to` must be after `window.from` and in the future; at most **3 hours** long (`window_too_long`); it may start at most 180 days ahead.
 - `size` (optional): the number of learners expected. More than **60** is refused (`room_too_large`). v1 rooms are for one class.
 - `graceHours` (default 24, 0–168): how long after `window.to` the room is kept so the teacher can download results. Then the room deletes itself.
-- `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees. Each activity (`qa` or `poll`) may carry `label` (optional, at most 80 characters after trimming, whitespace runs folded to one space; `text_too_long` if longer): display text for where it is in the lesson, written by the editor (slide number, slide heading, step number). It is text only: keys and step keys stay as they are, the server never interprets it, and pages show it with `textContent`. An activity without a label is shown by its step key (`*` as "whole lesson"; `s-xxx:0` as `s-xxx · step 1`).
+- `activities` (optional): the `extensions.live.activities` object of the lesson. If given, the room accepts only those activities; if not, it accepts any activity id (up to 64) and records the kind it first sees. Kinds: `qa` (questions), `confused` (a one-tap "I don't follow", no text) and `poll`. Each activity may carry `label` (optional, at most 80 characters after trimming, whitespace runs folded to one space; `text_too_long` if longer): display text for where it is in the lesson, written by the editor (slide number, slide heading, step number). It is text only: keys and step keys stay as they are, the server never interprets it, and pages show it with `textContent`. An activity without a label is shown by its step key (`*` as "whole lesson"; `s-xxx:0` as `s-xxx · step 1`).
 
 `createResponse` returns `endpoint`, `room`, `key`, `adminKey`, the `window`, `graceHours`, `expiresAt` (= `window.to` + grace), `requireApproval` and `teacherUrl` = `<endpoint>/room#room=<room>&admin=<adminKey>`. The teacher page shows the link once and tells the teacher to bookmark it. There is no recovery: a teacher who loses it creates a new room.
 
-**Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text` and moderation flags (`read`, `answered`, `shown`, `hidden`), for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. `activities` keeps each activity's `label`. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
+**Results.** `results` is `{v, room, window, activities, responses, exportedAt}` (format spec live §3). `responses` is a list sorted by time; each entry has `kind` (`qa`, `confused` or `poll`), `activity`, `step`, `pid`, optional `name`, `at`, and for `qa` the `id`, `text`, moderation flags (`read`, `answered`, `shown`, `hidden`) and, if present, `strokes` (the circled region), `sourceSha256`, `group` and `reply` (`{text, at, public}`); for `poll` the `choice` (index). Only the last vote of each participant per poll is kept. A `confused` entry is a mark that was on at export (one per participant and step). `activities` keeps each activity's `label`. If the teacher never set activities, `activities` is inferred from what was received (polls then have no `choices`).
 
 ## 3. Learner WebSocket
 
@@ -71,21 +73,23 @@ wss://live.egatari.org/ws?room=<room>&key=<key>&pid=<pid>
 
 | `t` | Members | When |
 |---|---|---|
-| `welcome` | `room`, `pid`, `status` (`admitted` \| `waiting`), `window`, `shown` (projected questions), `limits` | first message after connecting |
-| `admitted` | `shown` | the teacher admitted a waiting learner |
+| `welcome` | `room`, `pid`, `status` (`admitted` \| `waiting`), `window`, `shown` (projected questions), `limits`, `replies?` | first message after connecting. `replies` (only when there are some, only when admitted): the host's replies to this participant's own questions, so that a reply reaches a learner who was away |
+| `admitted` | `shown`, `replies?` | the teacher admitted a waiting learner |
 | `shown` | `items` | the list of projected questions changed (the full list, at most 50) |
+| `reply` | `item`, `question` (the participant's own text), `step`, `text`, `public`, `at` | the host replied to one of this participant's questions. Sent only to that participant's sockets |
 | `ack` | `ref?`, `item?` (item id for `ask`) | a request was accepted |
 | `error` | `code`, `ref?` | a request was refused; see §4 |
 | `pong` | | reply to `ping` |
 | `activities` | `ref?`, `activities`, `declared` | reply to `activities` (and later updates to the sockets that asked). `activities` is the same object as `extensions.live.activities`; `declared: false` means the teacher set none, so the list is inferred from what was received (any activity id is then accepted, and polls have no `choices`). |
 
-Projected questions carry `id`, `activity`, `step` and `text` only, never who asked.
+Projected questions carry `id`, `activity`, `step`, `text` and, if the host replied to everyone, `reply` (the reply's text) only, never who asked. **Learners never receive other learners' questions** except those the host shows (`mark shown`) or answers for everyone (`reply` with `public: true`); "I don't follow" marks are never sent to learners.
 
 ### 3.2 Learner → server
 
 | `t` | Members | Notes |
 |---|---|---|
-| `ask` | `activity`, `step`, `text` (1–500 characters) | a question for a `qa` activity. `step` is the step key under which the activity is declared, or, for an activity declared under `*`, the step key on screen when the learner pressed Send (the player MAY send `*`). |
+| `ask` | `activity`, `step`, `text` (1–500 characters), `strokes?`, `sourceSha256?` | a question for a `qa` activity. `step` is the step key under which the activity is declared, or, for an activity declared under `*`, the step key on screen when the learner pressed Send (the player MAY send `*`; the step key already names the slide, `slideKey:stepKey`). `strokes` (optional): a region the learner circled on that step, in stage coordinates (1280 × 720), the shape of Egatari Studio's review notes: `[[[x, y], …], …]`, 1–20 strokes of 2–500 points, 2000 points in all, each coordinate rounded to 0.1, no two consecutive points equal (players normalise before sending; the server refuses anything else with `bad_region` and keeps the connection; never with step `*`). `sourceSha256` (optional): the lesson's source hash, so that the question can be mapped onto that version of the lesson. An `ask` frame may be up to 40960 bytes; every other learner message stays within 2048. |
+| `confused` | `activity`, `step`, `on?` (default `true`) | "I don't follow" for a `confused` activity, without text: `on: true` marks the step, `on: false` takes the mark back. One mark per participant and step (a repeated tap changes nothing). `step` as for `ask`: the step on screen for an activity under `*` (the join page, which has no step, sends `*`). |
 | `vote` | `activity`, `step`, `choice` (0-based index) | a single-choice poll; a new vote replaces the previous one |
 | `name` | `name` (0–40 characters; empty clears) | only if the learner typed a name; allowed while waiting, so the teacher can recognise who is waiting |
 | `ping` | | keep-alive; answered without waking the room (Hibernation auto-response). Send it exactly as `{"v":1,"t":"ping"}`. At most once per 30 s. |
@@ -93,7 +97,7 @@ Projected questions carry `id`, `activity`, `step` and `text` only, never who as
 
 **Approval.** In a room that requires approval, a learner the teacher has not decided on yet gets `welcome` with `status: "waiting"` and **stays connected**; `admitted` follows when the teacher admits them. Close code **4441 always means a definite decline**: it is sent only after the teacher declined this pid (`deny`), either at that moment or when the declined pid connects again. It never means "still pending". A player shows "The teacher did not admit you" and does not reconnect by itself (the teacher may later admit the pid; a manual "Try again" is fine).
 
-Nothing else is sent: no viewing position, timing, playback events or device information. `ask` and `vote` from a learner who is still waiting get `error not_admitted`.
+Nothing else is sent: no viewing position, timing, playback events or device information. `ask`, `confused` and `vote` from a learner who is still waiting get `error not_admitted`.
 
 ## 4. Teacher WebSocket
 
@@ -117,15 +121,19 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 | `rekey` | | replace the learner key; all learners are closed with 4440; reply `rekeyed` |
 | `mark` | `item`, any of `read`, `answered`, `shown`, `hidden` (bool) | moderate a question. `hidden: true` clears `shown`; `shown: true` clears `hidden`. Showing broadcasts `shown` to admitted learners. |
 | `activities` | `activities` | set or replace the room's activities (same object as `extensions.live.activities`) |
+| `reply` | `item`, `text` (1–200 characters), `public?` (default `false`) | a short reply to a question and to every question in its group. It goes to each asker (`reply`), marks the questions answered, and is kept for askers who reconnect. With `public: true` the addressed question is also shown to everyone together with the reply (counts towards the 30 shown questions). Replying again replaces the reply. |
+| `group` | `items` (2–50 item ids) | group similar questions: they join the first item's group (or a new one); an item already in another group brings that whole group. Changed items are sent as `item`. |
+| `ungroup` | `item` | take a question out of its group; a group left with one question is dissolved |
 
 ### 4.2 Server → teacher
 
 | `t` | Members |
 |---|---|
-| `state` | `room`, `key`, `window`, `graceHours`, `expiresAt`, `open`, `requireApproval`, `activities`, `people` (`connected`, `waiting[]`), `items[]` (with `pid`, `name`, `at` and flags), `tallies` (`{activityId: {counts[], total}}`) |
+| `state` | `room`, `key`, `window`, `graceHours`, `expiresAt`, `open`, `requireApproval`, `activities`, `people` (`connected`, `waiting[]`), `items[]` (with `pid`, `name`, `at`, flags and, if present, `strokes`, `sourceSha256`, `group`, `reply`), `tallies` (`{activityId: {counts[], total}}`), `confused` (`{stepKey: participants who marked it}`) |
 | `people` | `connected`, `waiting[]` (`pid`, `name`, `since`) |
 | `item` | `item` (new or changed question) |
 | `tally` | `activity`, `counts[]`, `total` |
+| `confused` | `step`, `count` (participants whose "I don't follow" is on at that step) |
 | `rekeyed` | `room`, `key` (the new learner key, to paste into the editor) |
 | `ack`, `error` | as for learners; teacher errors may carry `message` |
 
@@ -144,9 +152,10 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 | `bad_choice` | choice out of range | kept |
 | `text_too_long`, `empty_text` | text caps | kept |
 | `rate_limited` | the participant's message budget is empty; on create: too many rooms from this sender | kept; closed 4429 after 10 drops |
-| `quota_exceeded` | more than 20 questions from one participant | kept |
-| `room_limit` | the room is full of items, activities or shown questions | kept |
+| `quota_exceeded` | more than 20 questions from one participant, or "I don't follow" on more than 100 steps | kept |
+| `room_limit` | the room is full of items, activities, shown questions, region points (40000) or "I don't follow" steps (500) | kept |
 | `not_admitted` | waiting for approval | kept |
+| `bad_region` | the circled region of an `ask` is not a valid strokes value (shape, bounds, rounding, limits) or comes with step `*` | kept |
 | `not_found`, `bad_request`, `unauthorized`, `forbidden` | HTTP and teacher errors | — |
 | `window_too_long` | create: window longer than 3 hours | — |
 | `room_too_large` | create: `size` above 60 | — |
@@ -179,7 +188,11 @@ v1 rooms are sized for one class: text Q&A and polls, about 40 people, for up to
 
 | Limit | Value | Why |
 |---|---|---|
-| learner frame | 2048 bytes | a 500-character question in UTF-8 plus the envelope |
+| learner frame | 2048 bytes; an `ask` up to 40960 | a 500-character question in UTF-8 plus the envelope; an `ask` may carry a region of 2000 points |
+| region | 20 strokes, 500 points each, 2000 in all; 40000 points per room | the review-notes shape of Egatari Studio; keeps the host's `state` small |
+| reply | 200 characters | a short reply; longer answers belong in the lesson |
+| "I don't follow" | one mark per participant and step; 100 steps per participant, 500 steps per room | |
+| grouping | 50 questions per `group` message | |
 | question / name / poll prompt / choice / activity label | 500 / 40 / 300 / 100 / 80 characters | text only |
 | rate | bucket of 5 messages, one more every 2 s; closed after 10 dropped messages | a person types far slower |
 | questions per participant | 20 | |
@@ -216,10 +229,10 @@ https://live.egatari.org/join#room=<room>&key=<key>
 
 - The room and the learner key are **only in the fragment**, which browsers never send, so they reach neither the server's request line nor any log. The page reads them with `location.hash`. Its own requests are `/join`, `/join.js`, `/join-core.js` and `/join.css`, with no query; the only URL that carries the key is the learner WebSocket `/ws?room=&key=&pid=` (§3), which already carries it.
 - The link is built from the room and the **current** learner key. After `rekey` the teacher page updates it and warns that links shared before stop working (the page then stops with 4440).
-- Same data rules as a player (format spec live §2.3): it sends only `ask`, `vote`, `name` (only if typed), `activities` and `ping`. The `pid` is random (16 bytes, base64url), kept in `localStorage` per room (key `egatari-live-pid:<room>`), in memory if storage is blocked. No telemetry; no third parties; every server string is shown with `textContent`. Same CSP as `/room` (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://<host>; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`), with `referrer-policy: no-referrer`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No Turnstile.
+- Same data rules as a player (format spec live §2.3): it sends only `ask`, `vote`, `confused` (the learner's own tap), `name` (only if typed), `activities` and `ping`. The `pid` is random (16 bytes, base64url), kept in `localStorage` per room (key `egatari-live-pid:<room>`), in memory if storage is blocked. No telemetry; no third parties; every server string is shown with `textContent`. Same CSP as `/room` (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://<host>; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`), with `referrer-policy: no-referrer`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No Turnstile.
 - Before connecting it shows the notice 「この教材は live.egatari.org の授業の部屋につながります」 / "This lesson connects to a live room at live.egatari.org" and a **参加する / Join** button; it connects only after the tap (remembered for the tab in `sessionStorage`, so a reload reconnects). While joined, a persistent indicator with **Disconnect**; while waiting for approval, a waiting notice (and the name field, so the teacher can recognise the learner).
 - Retry table, the same as the Studio player: never by itself after 4400, 4401, 4403, 4404, 4409, 4410, 4440 or 4441 (4441 and 4409 offer a manual "Try again"); 4423 after ≥ 30 s with jitter; 4425 at `window.from`; 4429 and 4430 after ≥ 60 s; network errors with backoff 1–30 s, only inside the window. The link does not carry the window, so before the first `welcome` the page does not know it: a network error is then retried at most 8 times before a manual "Try again", and 4425 waits ≥ 30 s, growing to 5 min.
-- What it shows: the Q&A with a send box (the first `qa` activity, preferring one under `*`; with no activities set, activity `qa` under `*`), the questions the teacher marked "shown", and **all polls the room has activities for**, in declaration order, each with its prompt and its step: the activity's `label` if it has one, otherwise the step key ("whole lesson" for `*`, `s-xxx · step 1` for `s-xxx:0`), with the step key in a tooltip. The page has no deck position and the protocol has no notion of an "open" poll, so it cannot show only the current one; the learner answers the one the teacher points to. A `qa` declared under `*` is sent with step `*` (§3.2); a vote is sent with the poll's declared step key and the 0-based choice index.
+- What it shows: the replies the host sent to this learner's questions (also after a reload: the room sends them again in `welcome`), an "I don't follow" toggle button when the room has a `confused` activity under `*` (sent with step `*`, since the page has no step on screen; with no activities set, activity `confused` under `*`), the Q&A with a send box (the first `qa` activity, preferring one under `*`; with no activities set, activity `qa` under `*`), the questions the teacher marked "shown", and **all polls the room has activities for**, in declaration order, each with its prompt and its step: the activity's `label` if it has one, otherwise the step key ("whole lesson" for `*`, `s-xxx · step 1` for `s-xxx:0`), with the step key in a tooltip. The page has no deck position and the protocol has no notion of an "open" poll, so it cannot show only the current one; the learner answers the one the teacher points to. A `qa` declared under `*` is sent with step `*` (§3.2); a vote is sent with the poll's declared step key and the 0-based choice index.
 - ja and en, from `navigator.language`, with a manual toggle (remembered in `localStorage`). Mobile first; it works from 320 px wide.
 
 ---
@@ -233,6 +246,7 @@ Egatari Live は、配った教材（再生専用のファイル）から、そ�
 - **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
 - **活動の表示名**：活動（`qa`・`poll`）は任意で `label`（80 字まで。例「4 枚目『XML の壁』・段階 1」）を持てる。編集アプリが活動を作るときに書く表示のための字で、鍵や段階の鍵はそのまま。教員のページと参加用のページは、段階の鍵の代わりにこれを出し（鍵は title の吹き出し）、結果の JSON の `activities` にも残る。`label` のない古い活動は段階の鍵（「s-xxx · 段階 1」）で出す。
 - **教員の WebSocket**：`/ws/teacher?room=`。最初のメッセージで `adminKey` を送る。部屋を開ける・閉じる、承認（待合）、参加の鍵の取り替え（古い鍵の人は切断）、質問の「読んだ・答えた・映す・隠す」、投票の集計。
+- **質問とわからない**：質問（`ask`）には、送ったときに画面にあったステップ（`slideKey:stepKey`）と、任意で囲んだところ（`strokes`。舞台の座標、Studio の手書きメモと同じ形で 20 本・1 本 500 点・合わせて 2000 点まで）と、教材の版（`sourceSha256`）が付く。質問はホストだけが見る。ホストは似た質問をまとめ（`group`・`ungroup`）、短い返事（`reply`。200 字まで）を送れる。返事は質問した人にだけ届き（まとめた質問なら質問した人みんなに）、ホストが選べば質問と一緒に全員に出る（`public`）。「わからない」（活動の種類 `confused`）は文のない一押しで、1 人 1 ステップに 1 回、取り消せる。ホストにはステップごとの人数だけが届き、参加者には何も届かない。
 - **版**：すべてのメッセージに `v: 1`。知らない項目・知らない種類は拒否する。
 - **承認**：待っている人には `welcome`（`status: "waiting"`）が届き、接続は切れない。4441 は教員が「断る」を選んだときだけで、「まだ待っている」の意味にはならない。
 - **切断の番号**：4400 不正なメッセージ、4401 教員の鍵がない、4403 鍵が違う、4404 部屋がない、4409 同じ id の新しい接続、4410 期限切れ、4423 部屋が閉じた、4425 まだ始まっていない、4429 送りすぎ、4430 満員、4440 鍵が替わった、4441 承認されなかった。

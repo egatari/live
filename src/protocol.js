@@ -37,6 +37,7 @@ export const ERR = Object.freeze({
   QUOTA_EXCEEDED: "quota_exceeded",
   ROOM_LIMIT: "room_limit",
   NOT_ADMITTED: "not_admitted",
+  BAD_REGION: "bad_region",
   NOT_FOUND: "not_found",
   BAD_REQUEST: "bad_request",
   UNAUTHORIZED: "unauthorized",
@@ -55,6 +56,8 @@ export const RE_ADMIN = /^[A-Za-z0-9_-]{43,64}$/;
 export const RE_PID = /^[A-Za-z0-9_-]{16,43}$/;
 export const RE_ACTIVITY = /^[A-Za-z0-9_-]{1,32}$/;
 export const RE_ITEM = /^q-[a-z2-7]{10}$/;
+export const RE_GROUP = /^g-[a-z2-7]{10}$/;
+export const RE_SHA256 = /^[0-9a-f]{64}$/;
 // A step key is "slideKey:stepKey" (format spec) or "*" for the whole lesson.
 export const RE_STEP = /^(\*|[^\u0000-\u001f\u007f:]{1,80}:[^\u0000-\u001f\u007f:]{1,16})$/;
 // RFC 3339 date-time with an explicit offset
@@ -80,6 +83,7 @@ export const newRoomId = () => "r-" + randomBase32(8);
 export const newLearnerKey = () => randomBase64url(16);   // 22 chars, 128 bits
 export const newAdminKey = () => randomBase64url(32);     // 43 chars, 256 bits
 export const newItemId = () => "q-" + randomBase32(10);
+export const newGroupId = () => "g-" + randomBase32(10);
 
 export async function sha256(s) {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -130,18 +134,63 @@ export function parseFrame(raw, maxBytes) {
   return m;
 }
 
+/**
+ * A circled region: strokes in stage coordinates, the shape of Studio's review notes (contract §12):
+ * 1-20 strokes, each 2-500 points [x, y] with 0 <= x <= 1280, 0 <= y <= 720, rounded to 0.1, no two consecutive
+ * points equal; 2000 points in all. Players normalise before sending; the server only checks, and refuses
+ * anything else with `bad_region` (the connection stays open). Returns the strokes, or throws.
+ */
+export function checkStrokes(v) {
+  const bad = (why) => new ProtocolError(ERR.BAD_REGION, why);
+  if (!Array.isArray(v) || v.length < 1 || v.length > L.MAX_REGION_STROKES) throw bad(`1-${L.MAX_REGION_STROKES} strokes`);
+  let total = 0;
+  const tenth = (x) => Math.abs(Math.round(x * 10) / 10 - x) < 1e-9;
+  for (const s of v) {
+    if (!Array.isArray(s) || s.length < 2 || s.length > L.MAX_REGION_STROKE_POINTS) throw bad(`each stroke has 2-${L.MAX_REGION_STROKE_POINTS} points`);
+    total += s.length;
+    if (total > L.MAX_REGION_POINTS) throw bad(`at most ${L.MAX_REGION_POINTS} points in all`);
+    let px = null, py = null;
+    for (const pt of s) {
+      if (!Array.isArray(pt) || pt.length !== 2) throw bad("a point is [x, y]");
+      const [x, y] = pt;
+      if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) throw bad("coordinates are numbers");
+      if (x < 0 || x > L.STAGE_W || y < 0 || y > L.STAGE_H) throw bad("a point is outside the stage");
+      if (!tenth(x) || !tenth(y)) throw bad("coordinates are rounded to 0.1");
+      if (x === px && y === py) throw bad("two consecutive points are equal");
+      px = x; py = y;
+    }
+  }
+  return v.map((s) => s.map(([x, y]) => [x, y]));
+}
+
 /** Validate a learner message after parseFrame. Returns a normalised copy. */
 export function checkLearnerMessage(m) {
   const base = ["v", "t", "ref"];
   switch (m.t) {
     case "ask": {
-      if (!only(m, [...base, "activity", "step", "text"])) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
+      if (!only(m, [...base, "activity", "step", "text", "strokes", "sourceSha256"])) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
       checkActivityRef(m);
       if (typeof m.text !== "string") throw new ProtocolError(ERR.BAD_MESSAGE, "text must be a string");
+      if (m.sourceSha256 !== undefined && !(typeof m.sourceSha256 === "string" && RE_SHA256.test(m.sourceSha256))) {
+        throw new ProtocolError(ERR.BAD_MESSAGE, "sourceSha256 must be 64 lowercase hex digits");
+      }
       const text = cleanText(m.text);
       if (!text) throw new ProtocolError(ERR.EMPTY_TEXT);
       if ([...text].length > L.MAX_QUESTION_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG);
-      return { t: "ask", ref: m.ref, activity: m.activity, step: m.step, text };
+      const out = { t: "ask", ref: m.ref, activity: m.activity, step: m.step, text };
+      if (m.strokes !== undefined) {
+        // a region is drawn on one step: "*" has no stage to circle on
+        if (m.step === "*") throw new ProtocolError(ERR.BAD_REGION, "a region needs the step it was drawn on");
+        out.strokes = checkStrokes(m.strokes);
+      }
+      if (m.sourceSha256 !== undefined) out.sourceSha256 = m.sourceSha256;
+      return out;
+    }
+    case "confused": {
+      if (!only(m, [...base, "activity", "step", "on"])) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
+      checkActivityRef(m);
+      if (m.on !== undefined && typeof m.on !== "boolean") throw new ProtocolError(ERR.BAD_MESSAGE, "on must be boolean");
+      return { t: "confused", ref: m.ref, activity: m.activity, step: m.step, on: m.on !== false };
     }
     case "vote": {
       if (!only(m, [...base, "activity", "step", "choice"])) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
@@ -202,6 +251,31 @@ export function checkTeacherMessage(m) {
     case "activities":
       need(["activities"]);
       return { ...m, activities: checkActivities(m.activities) };
+    case "reply": {
+      // a short reply to one question, or to every question in its group; `public` also shows it to everyone
+      need(["item", "text", "public"]);
+      if (typeof m.item !== "string" || !RE_ITEM.test(m.item)) throw new ProtocolError(ERR.BAD_MESSAGE, "bad item");
+      if (typeof m.text !== "string") throw new ProtocolError(ERR.BAD_MESSAGE, "text must be a string");
+      if (m.public !== undefined && typeof m.public !== "boolean") throw new ProtocolError(ERR.BAD_MESSAGE, "public must be boolean");
+      const text = cleanText(m.text);
+      if (!text) throw new ProtocolError(ERR.EMPTY_TEXT);
+      if ([...text].length > L.MAX_REPLY_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG);
+      return { ...m, text, public: m.public === true };
+    }
+    case "group": {
+      need(["items"]);
+      if (!Array.isArray(m.items) || m.items.length < 2 || m.items.length > L.MAX_GROUP_ITEMS) {
+        throw new ProtocolError(ERR.BAD_MESSAGE, `items: 2-${L.MAX_GROUP_ITEMS} item ids`);
+      }
+      for (const id of m.items) if (typeof id !== "string" || !RE_ITEM.test(id)) throw new ProtocolError(ERR.BAD_MESSAGE, "bad item");
+      const items = [...new Set(m.items)];
+      if (items.length < 2) throw new ProtocolError(ERR.BAD_MESSAGE, "items: 2 different item ids");
+      return { ...m, items };
+    }
+    case "ungroup":
+      need(["item"]);
+      if (typeof m.item !== "string" || !RE_ITEM.test(m.item)) throw new ProtocolError(ERR.BAD_MESSAGE, "bad item");
+      return m;
     default:
       throw new ProtocolError(ERR.UNKNOWN_TYPE, `unknown type ${m.t}`);
   }
@@ -230,8 +304,8 @@ export function checkActivities(a) {
         if (!label) label = undefined;
       }
       const lab = label === undefined ? {} : { label };
-      if (act.kind === "qa") {
-        out[step].push({ id: act.id, kind: "qa", ...lab });
+      if (act.kind === "qa" || act.kind === "confused") {
+        out[step].push({ id: act.id, kind: act.kind, ...lab });
       } else if (act.kind === "poll") {
         const prompt = act.prompt === undefined ? undefined : cleanText(act.prompt);
         if (prompt !== undefined && [...prompt].length > L.MAX_PROMPT_CHARS) throw new ProtocolError(ERR.TEXT_TOO_LONG, "prompt too long");

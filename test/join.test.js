@@ -496,3 +496,76 @@ describe("activity labels on the join and teacher pages", () => {
     expect(teacher).not.toMatch(/innerHTML|insertAdjacentHTML/);
   });
 });
+
+describe("questions on the join page: I don't follow, replies", () => {
+  const activities = { "*": [{ id: "qa", kind: "qa" }, { id: "cf", kind: "confused" }] };
+  const realDeps = (urls) => ({
+    WebSocket: workerSocketClass(urls), random: Math.random, now: () => Date.now(),
+    setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (id) => clearTimeout(id),
+    setInterval: (f, ms) => setInterval(f, ms), clearInterval: (id) => clearInterval(id),
+  });
+
+  it("viewOf offers a confused activity declared for the whole lesson (this page has no step on screen)", () => {
+    expect(viewOf(activities, true).confused).toEqual({ id: "cf", step: "*" });
+    expect(viewOf({ "s:1": [{ id: "cf", kind: "confused" }] }, true).confused).toBeNull();
+    expect(viewOf({}, false).confused).toEqual({ id: "confused", step: "*" });   // no activities set: any id is accepted
+  });
+
+  it("a tap marks, another takes it back; the host's reply reaches only this page, and again after a reload", async () => {
+    const r = await createRoom({ activities });
+    const t = await joinTeacher(r);
+    const urls = [], urls2 = [];
+    const { client, events } = makeClient({ room: r.room, key: r.key, ...realDeps(urls) });
+    const other = makeClient({ room: r.room, key: r.key, ...realDeps(urls2) });
+    client.join(); other.client.join();
+    let s = await waitFor(events, (x) => x.state === "connected" && !!x.view.confused);
+    await waitFor(other.events, (x) => x.state === "connected" && !!x.view.confused);
+    expect(client.confused()).toBe(true);
+    await waitFor(events, (_, ev) => ev.some((e) => e.ev && e.ev.type === "ack" && e.ev.kind === "confused"));
+    expect((await t.next("confused")).count).toBe(1);
+    expect(client.snapshot().confused).toBe(true);
+    client.confused();
+    expect((await t.next("confused")).count).toBe(0);
+    expect(client.snapshot().confused).toBe(false);
+
+    client.ask("Why?");
+    const { item } = await t.next("item");
+    t.send({ v: 1, t: "reply", item: item.id, text: "Because." });
+    s = await waitFor(events, (x) => x.replies.length === 1);
+    expect(s.replies[0]).toMatchObject({ item: item.id, question: "Why?", text: "Because.", public: false });
+    // the other learner gets nothing
+    await new Promise((res) => setTimeout(res, 100));
+    expect(other.client.snapshot().replies).toEqual([]);
+    expect(other.client.snapshot().shown).toEqual([]);
+    // public: everyone sees the question with the reply
+    t.send({ v: 1, t: "reply", item: item.id, text: "Because, for all.", public: true });
+    const so = await waitFor(other.events, (x) => x.shown.length === 1);
+    expect(so.shown[0]).toMatchObject({ text: "Why?", reply: "Because, for all." });
+    // after a reload (same pid in localStorage) the reply is there again
+    const pid = client.pid();
+    client.leave();
+    const again = makeClient({ room: r.room, key: r.key, ...realDeps([]) });
+    again.client.local.set("egatari-live-pid:" + r.room, pid);
+    again.client.join();
+    s = await waitFor(again.events, (x) => x.state === "connected" && x.replies.length === 1);
+    expect(s.replies[0].text).toBe("Because, for all.");
+    for (const m of client.ws ? client.ws.sent : []) expect(validate(m, "learnerToServer")).toEqual([]);
+    again.client.leave(); other.client.leave();
+    t.close();
+  });
+
+  it("both pages show replies and questions as text only, with labelled controls", async () => {
+    const html = await (await SELF.fetch(ORIGIN + "/join")).text();
+    expect(html).toContain('id="confused" class="confused" aria-pressed="false"');
+    const join = await (await SELF.fetch(ORIGIN + "/join.js")).text();
+    expect(join).toContain('confused: "わからない"');
+    expect(join).not.toMatch(/innerHTML|insertAdjacentHTML/);
+    const teacher = await (await SELF.fetch(ORIGIN + "/teacher.js")).text();
+    expect(teacher).toContain('"aria-label": t("reply")');
+    expect(teacher).toContain('replyAll: "参加者全員にも見せる"');
+    expect(teacher).not.toMatch(/innerHTML|insertAdjacentHTML/);
+    const room = await (await SELF.fetch(ORIGIN + "/room")).text();
+    expect(room).toContain('id="btn-group"');
+    expect(room).toContain('id="confused"');
+  });
+});

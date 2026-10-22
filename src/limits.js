@@ -6,6 +6,7 @@ export const PROTOCOL_VERSION = 1;
 
 // Sizes (bytes of the raw WebSocket frame, UTF-8)
 export const MAX_LEARNER_MESSAGE_BYTES = 2048;
+export const MAX_ASK_MESSAGE_BYTES = 40960;    // an `ask` may carry a circled region: 2000 points of "[1279.9,719.9]," plus the text
 export const MAX_TEACHER_MESSAGE_BYTES = 32768;
 export const MAX_CREATE_BODY_BYTES = 32768;
 
@@ -15,6 +16,16 @@ export const MAX_NAME_CHARS = 40;
 export const MAX_PROMPT_CHARS = 300;
 export const MAX_CHOICE_CHARS = 100;
 export const MAX_LABEL_CHARS = 80;          // an activity's display label ("Slide 4 'XML', step 1"); text only, never a key
+export const MAX_REPLY_CHARS = 200;         // the host's short reply to a question (or a group of questions)
+
+// A circled region on a question: strokes in stage coordinates (1280 x 720), the shape of Studio's review notes
+// (contract §12): at most 20 strokes, 500 points each, 2000 points in all; each point [x, y] rounded to 0.1.
+export const STAGE_W = 1280;
+export const STAGE_H = 720;
+export const MAX_REGION_STROKES = 20;
+export const MAX_REGION_STROKE_POINTS = 500;
+export const MAX_REGION_POINTS = 2000;
+export const MAX_REGION_POINTS_PER_ROOM = 40000;   // keeps the host's state message small (about 600 KB at most)
 
 // Rate limit per learner connection: token bucket
 export const RATE_BURST = 5;              // messages that may arrive at once
@@ -33,6 +44,10 @@ export const MAX_SHOWN = 30;                  // projected at once; more does no
 export const MAX_ROOM_SIZE = MAX_LEARNER_CONNECTIONS;  // the largest `size` a create request may ask for
 export const MAX_TEACHER_CONNECTIONS = 4;
 export const MAX_ACTIVITIES = 64;
+export const MAX_GROUP_ITEMS = 50;            // questions the host groups in one message
+// "I don't follow" (kind confused): one mark per participant per step, which the participant can take back.
+export const MAX_CONFUSED_STEPS_PER_PARTICIPANT = 100;   // distinct steps one participant may mark
+export const MAX_CONFUSED_STEPS = 500;                   // distinct steps counted in one room
 export const MAX_CHOICES = 12;
 export const TEACHER_AUTH_TIMEOUT_MS = 10000;
 
@@ -55,5 +70,9 @@ export function publicLimits() {
     questionsPerParticipant: MAX_QUESTIONS_PER_PARTICIPANT,
     burst: RATE_BURST,
     refillMs: RATE_REFILL_MS,
+    askBytes: MAX_ASK_MESSAGE_BYTES,
+    regionStrokes: MAX_REGION_STROKES,
+    regionStrokePoints: MAX_REGION_STROKE_POINTS,
+    regionPoints: MAX_REGION_POINTS,
   };
 }

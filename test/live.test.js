@@ -47,7 +47,7 @@ describe("protocol files", () => {
     const r = await createRoom();
     const c = await joinLearner(r);
     await c.next("welcome");
-    for (const name of ["name", "ask"]) {
+    for (const name of ["name", "ask", "ask-region", "confused"]) {
       c.send(fixtures[`../protocol/fixtures/learner/${name}.json`]);
       ok(await c.next("ack"), "serverToLearner");
     }
@@ -410,9 +410,17 @@ describe("limits", () => {
     await c.next("welcome");
     c.send(ask("x".repeat(L.MAX_QUESTION_CHARS + 1)));
     expect((await c.next("error")).code).toBe("text_too_long");
+    // an ask may carry a region, so its frame may be larger than other learner messages, up to MAX_ASK_MESSAGE_BYTES
     c.send(ask("x".repeat(L.MAX_LEARNER_MESSAGE_BYTES)));
+    expect((await c.next("error")).code).toBe("text_too_long");
+    c.send({ v: 1, t: "name", name: "x".repeat(L.MAX_LEARNER_MESSAGE_BYTES) });
     expect((await c.next("error")).code).toBe("too_large");
     expect(await c.closedWith()).toBe(CLOSE.BAD_MESSAGE);
+    const d = await joinLearner(r);
+    await d.next("welcome");
+    d.send(ask("x".repeat(L.MAX_ASK_MESSAGE_BYTES)));
+    expect((await d.next("error")).code).toBe("too_large");
+    expect(await d.closedWith()).toBe(CLOSE.BAD_MESSAGE);
   });
 
   it("bad JSON or a wrong version closes with 4400", async () => {

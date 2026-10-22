@@ -67,8 +67,17 @@
     <ul id="waiting" class="list"></ul>
 
     <h3><span data-i18n="questions"></span> <span id="n-items" class="muted"></span></h3>
-    <label class="check"><input type="checkbox" id="chk-hidden"> <span data-i18n="showHidden"></span></label>
+    <p class="muted" data-i18n="replyHelp"></p>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="chk-hidden"> <span data-i18n="showHidden"></span></label>
+      <button type="button" id="btn-group" class="small" disabled data-i18n="groupSel"></button>
+    </div>
+    <p class="muted small-text" data-i18n="groupHelp"></p>
     <ul id="items" class="list"></ul>
+
+    <h3 data-i18n="confused"></h3>
+    <p class="muted" data-i18n="confusedHelp"></p>
+    <ul id="confused" class="list compact"></ul>
 
     <h3 data-i18n="polls"></h3>
     <div id="polls"></div>

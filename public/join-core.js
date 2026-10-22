@@ -3,8 +3,8 @@
 // /join.js draws it; the tests drive it with a fake WebSocket and a fake clock.
 //
 // Same data rules as a player (format spec extensions/live.md §2.3, PROTOCOL.md §7): it sends only `ask`,
-// `vote`, `name` (only if the learner typed one), `activities` (to learn the room's polls; no learner data)
-// and `ping`. The pid is random, made on the device, and kept in localStorage (memory if storage is blocked).
+// `vote`, `confused` (the learner's own tap), `name` (only if the learner typed one), `activities` (to learn
+// the room's polls; no learner data) and `ping`. The pid is random, made on the device, and kept in localStorage (memory if storage is blocked).
 // It never makes an HTTP request: the only network use is the learner WebSocket, whose URL carries the key
 // as the protocol defines. The room and key come from the page's fragment, which browsers never send.
 
@@ -165,7 +165,7 @@ export function stepText(step, label, lang = "ja") {
 }
 
 /**
- * From the room's activities: the Q&A to send questions to, and every poll with its step key.
+ * From the room's activities: the Q&A to send questions to, the "I don't follow" activity, and every poll with its step key.
  * There is no deck position on this page and the protocol has no notion of an "open" poll, so all polls
  * the room declares are listed, in declaration order, each labelled with its prompt and its step (the
  * activity's `label` if it has one, see stepText).
@@ -174,12 +174,14 @@ export function stepText(step, label, lang = "ja") {
  */
 export function viewOf(activities, declared) {
   const polls = [];
-  let qa = null;
+  let qa = null, confused = null;
   for (const [step, list] of Object.entries(activities || {})) {
     if (!Array.isArray(list)) continue;
     for (const a of list) {
       if (!a || typeof a.id !== "string") continue;
       if (a.kind === "qa" && (!qa || (step === "*" && qa.step !== "*"))) qa = { id: a.id, step };
+      // this page has no step on screen, so only an "I don't follow" declared for the whole lesson ("*") fits it
+      if (a.kind === "confused" && step === "*" && !confused) confused = { id: a.id, step };
       if (a.kind === "poll" && Array.isArray(a.choices) && a.choices.length >= 2) {
         polls.push({ id: a.id, step, prompt: typeof a.prompt === "string" ? a.prompt : "", choices: a.choices.filter((c) => typeof c === "string"),
           ...(typeof a.label === "string" && a.label ? { label: a.label } : {}) });
@@ -187,7 +189,8 @@ export function viewOf(activities, declared) {
     }
   }
   if (!qa && !declared) qa = { id: "qa", step: "*" };
-  return { qa, polls };
+  if (!confused && !declared) confused = { id: "confused", step: "*" };
+  return { qa, confused, polls };
 }
 
 // ------------------------------------------------------------------ the client
@@ -217,6 +220,8 @@ export class JoinClient {
     this.activities = {};
     this.declared = false;
     this.votes = {};          // poll id -> {choice, ok}
+    this.replies = {};        // item id -> the host's reply to one of this learner's questions
+    this.confusedOn = false;  // this learner's "I don't follow" (step "*": this page has no step on screen)
     this.pending = {};        // ref -> what was sent
     this.refN = 0;
     this.name = "";           // the name the learner typed
@@ -243,6 +248,7 @@ export class JoinClient {
       retryInMs: this.st === "retrying" ? Math.max(0, this.retryAt - this.d.now()) : null,
       window: this.win, admitted: this.admitted, shown: this.shown.slice(),
       view: viewOf(this.activities, this.declared), votes: { ...this.votes },
+      replies: Object.values(this.replies).sort((a, b) => String(a.at).localeCompare(String(b.at))), confused: this.confusedOn,
     };
   }
 
@@ -288,6 +294,23 @@ export class JoinClient {
     const ok = this.request({ t: "vote", activity: p.id, step: p.step, choice }, { kind: "vote", id: p.id, choice, prev: this.votes[p.id] || null });
     if (ok) { this.votes[p.id] = { choice, ok: false }; this.emit(); }
     return ok;
+  }
+
+  /** "I don't follow": one tap marks it, another takes it back. No text; counted per step by the room. */
+  confused(on) {
+    const { confused } = viewOf(this.activities, this.declared);
+    if (!confused || !this.admitted) return false;
+    const want = on === undefined ? !this.confusedOn : !!on;
+    const ok = this.request({ t: "confused", activity: confused.id, step: confused.step, on: want }, { kind: "confused", on: want, prev: this.confusedOn });
+    if (ok) { this.confusedOn = want; this.emit(); }
+    return ok;
+  }
+
+  setReplies(list) {
+    for (const r of Array.isArray(list) ? list.slice(0, 400) : []) {
+      if (r && typeof r.item === "string" && typeof r.text === "string") this.replies[r.item] = { item: r.item, question: typeof r.question === "string" ? r.question : "",
+        text: r.text, public: r.public === true, at: typeof r.at === "string" ? r.at : "" };
+    }
   }
 
   setName(name) {
@@ -365,6 +388,7 @@ export class JoinClient {
         if (m.window && Number.isFinite(windowEnd(m.window))) this.win = { from: m.window.from, to: m.window.to };
         this.admitted = m.status === "admitted";
         this.shown = this.admitted ? items(m.shown) : [];
+        this.setReplies(m.replies);
         this.set(this.admitted ? "connected" : "waiting", { event: { type: m.status } });
         this.sendName();
         if (this.admitted) this.request({ t: "activities" }, { kind: "activities" });
@@ -372,12 +396,16 @@ export class JoinClient {
       case "admitted":
         this.admitted = true;
         this.shown = items(m.shown);
+        this.setReplies(m.replies);
         this.set("connected", { event: { type: "admitted" } });
         this.request({ t: "activities" }, { kind: "activities" });
         return;
       case "shown":
         this.shown = items(m.items);
         return this.emit({ type: "shown" });
+      case "reply":
+        this.setReplies([m]);
+        return this.emit({ type: "reply" });
       case "activities": {
         if (typeof m.ref === "string") delete this.pending[m.ref];
         this.activities = m.activities && typeof m.activities === "object" && !Array.isArray(m.activities) ? m.activities : {};
@@ -396,6 +424,7 @@ export class JoinClient {
         const p = typeof m.ref === "string" ? this.pending[m.ref] : null;
         if (p) delete this.pending[m.ref];
         if (p && p.kind === "vote") { if (p.prev) this.votes[p.id] = p.prev; else delete this.votes[p.id]; }
+        if (p && p.kind === "confused") this.confusedOn = p.prev;
         return this.emit({ type: "error", code: typeof m.code === "string" ? m.code : "", kind: p ? p.kind : null });
       }
       default:

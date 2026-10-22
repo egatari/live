@@ -36,6 +36,13 @@ import { shareText } from "/join-core.js";
       sExpired: "This room has expired and was deleted.",
       anonymous: "(no name)", at: "at",
       footer: "Egatari Live, part of Egatari Studio. No accounts, no telemetry; rooms are deleted after their grace period.",
+      select: "Select", groupSel: "Group selected questions", groupHelp: "Tick similar questions and group them: one reply then reaches everyone who asked.",
+      similar: (n) => `${n} similar questions`, ungroup: "Remove from group", reply: "Reply", replyPh: "A short reply (up to 200 characters)",
+      replyAll: "Also show to all participants", sendReply: "Send reply", replied: "Reply:", repliedAll: "(shown to all participants)",
+      replyHelp: "A reply goes only to the participant who asked (to everyone who asked, for a group). Ticking “Also show to all participants” shows the question and the reply on every participant's screen, without the name.",
+      region: "Circled area (position on the slide)", version: "lesson version", confused: "I don't follow", noConfused: "Nobody has tapped “I don't follow” yet.",
+      confusedHelp: "Participants who tapped “I don't follow” at each step (each person once per step; they can take it back).", people: (n) => `${n} ${n === 1 ? "person" : "people"}`,
+      err_bad_region: "The circled area was not accepted.", err_text_too_long: "The reply is too long (up to 200 characters).", err_empty_text: "The reply is empty.",
       badJson: "Activities is not valid JSON.",
       size: "Expected learners (max 60)", bookmarked: "I have bookmarked it",
       turnstileDev: "Development mode: no Turnstile site key is set, so a test token is sent.",
@@ -75,6 +82,13 @@ import { shareText } from "/join-core.js";
       sExpired: "この部屋は期限が過ぎ、消えました。",
       anonymous: "（名前なし）", at: "",
       footer: "Egatari Live（Egatari Studio の一部）。アカウントも利用状況の記録もありません。部屋は猶予の時間のあと消えます。",
+      select: "選ぶ", groupSel: "選んだ質問をまとめる", groupHelp: "似た質問に印を付けてまとめると、1 回の返事が質問した人みんなに届きます。",
+      similar: (n) => `似た質問 ${n} 件`, ungroup: "まとめから外す", reply: "返事", replyPh: "短い返事（200 字まで）",
+      replyAll: "参加者全員にも見せる", sendReply: "返事を送る", replied: "返事：", repliedAll: "（参加者全員に表示中）",
+      replyHelp: "返事は質問した人にだけ届きます（まとめた質問なら、質問した人みんなに）。「参加者全員にも見せる」に印を付けると、質問と返事が名前なしで全員の画面に出ます。",
+      region: "囲んだところ（スライドの上の位置）", version: "教材の版", confused: "わからない", noConfused: "まだ「わからない」は届いていません。",
+      confusedHelp: "ステップごとに、「わからない」を押した人の数です（1 人 1 ステップに 1 回。押した人は取り消せます）。", people: (n) => `${n} 人`,
+      err_bad_region: "囲んだところを受け付けられませんでした。", err_text_too_long: "返事が長すぎます（200 字まで）。", err_empty_text: "返事が空です。",
       badJson: "活動の JSON が正しくありません。",
       size: "参加する人数の見込み（最大 60）", bookmarked: "ブックマークしました",
       turnstileDev: "開発用：Turnstile のサイトキーがないため、試験用のトークンを送ります。",
@@ -110,7 +124,7 @@ import { shareText } from "/join-core.js";
   }
 
   // ------------------------------------------------------------- state
-  const S = { room: null, admin: null, ws: null, state: null, retry: 0, fatal: false, showHidden: false };
+  const S = { room: null, admin: null, ws: null, state: null, retry: 0, fatal: false, showHidden: false, selected: new Set(), drafts: {} };
   const hash = new URLSearchParams(location.hash.slice(1));
   S.room = hash.get("room");
   S.admin = hash.get("admin");
@@ -220,8 +234,9 @@ import { shareText } from "/join-core.js";
         renderItems();
       } break;
       case "tally": if (S.state) { S.state.tallies[m.activity] = { counts: m.counts, total: m.total }; renderPolls(); } break;
+      case "confused": if (S.state) { (S.state.confused ||= {})[m.step] = m.count; renderConfused(); } break;
       case "rekeyed": if (S.state) { S.state.key = m.key; $("rekeyed").hidden = false; $("join-rekeyed").hidden = false; renderStatus(); } break;
-      case "error": $("dash-error").textContent = m.code + (m.message ? ": " + m.message : ""); break;
+      case "error": $("dash-error").textContent = ["bad_region", "text_too_long", "empty_text"].includes(m.code) ? t("err_" + m.code) : m.code + (m.message ? ": " + m.message : ""); break;
     }
   }
 
@@ -264,19 +279,116 @@ import { shareText } from "/join-core.js";
     )) : [el("li", { class: "muted", text: t("noWaiting") })]));
   }
 
-  function renderItems() {
-    const items = S.state.items.filter((q) => S.showHidden || !q.hidden).slice().reverse();
-    $("n-items").textContent = `(${S.state.items.length})`;
-    const flag = (q, f) => el("label", { class: "check" },
+  // A small drawing of the circled area in stage coordinates (1280 x 720). The host has no slide image here,
+  // so it shows where on the slide the participant circled. Built with DOM calls, never from markup.
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function regionSvg(strokes) {
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", "0 0 1280 720");
+    svg.setAttribute("class", "region");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", t("region"));
+    const frame = document.createElementNS(SVGNS, "rect");
+    for (const [k, v] of Object.entries({ x: 1, y: 1, width: 1278, height: 718, class: "region-frame" })) frame.setAttribute(k, String(v));
+    svg.append(frame);
+    for (const st of strokes) {
+      if (!Array.isArray(st)) continue;
+      const pl = document.createElementNS(SVGNS, "polyline");
+      pl.setAttribute("points", st.filter((p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)).map((p) => p.join(",")).join(" "));
+      pl.setAttribute("class", "region-stroke");
+      svg.append(pl);
+    }
+    return svg;
+  }
+
+  // Keep what the host is typing in a reply box across re-renders (a new question re-renders the list).
+  function rememberFocus() {
+    const a = document.activeElement;
+    return a && a.dataset && a.dataset.draft ? { key: a.dataset.draft, start: a.selectionStart, end: a.selectionEnd } : null;
+  }
+  function restoreFocus(f) {
+    if (!f) return;
+    const e = document.querySelector(`[data-draft="${CSS.escape(f.key)}"]`);
+    if (e) { e.focus(); try { e.setSelectionRange(f.start, f.end); } catch { /* not a text field */ } }
+  }
+
+  function replyForm(key, item) {
+    const input = el("input", { type: "text", class: "reply-text", maxlength: "200", placeholder: t("replyPh"), "aria-label": t("reply"), "data-draft": key });
+    input.value = S.drafts[key] || "";
+    input.addEventListener("input", () => { S.drafts[key] = input.value; });
+    const all = el("input", { type: "checkbox", class: "reply-all" });
+    const submit = () => {
+      const text = input.value.trim();
+      if (!text) { input.focus(); return; }
+      send({ t: "reply", item: item.id, text, public: all.checked });
+      delete S.drafts[key];
+      input.value = "";
+    };
+    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); submit(); } });
+    return el("div", { class: "reply-form row" }, input,
+      el("label", { class: "check" }, all, el("span", { text: t("replyAll") })),
+      el("button", { type: "button", class: "small", text: t("sendReply"), onclick: submit }));
+  }
+
+  function itemCard(q, inGroup) {
+    const flag = (f) => el("label", { class: "check" },
       el("input", { type: "checkbox", checked: q[f], onchange: (ev) => send({ t: "mark", item: q.id, [f]: ev.target.checked }) }),
       el("span", { text: t(f) }));
-    $("items").replaceChildren(...(items.length ? items.map((q) => el("li", {
-      class: [q.read && "read", q.hidden && "hidden-item", q.shown && !q.hidden && "shown"].filter(Boolean).join(" "),
-    },
-      el("p", { class: "q-text", text: q.text }),
-      el("div", { class: "q-meta", text: `${q.name || t("anonymous")} · ${q.step} · ${fmt(q.at)}` }),
-      el("div", { class: "row" }, flag(q, "read"), flag(q, "answered"), flag(q, "shown"), flag(q, "hidden")),
-    )) : [el("li", { class: "muted", text: t("noItems") })]));
+    const sel = el("input", { type: "checkbox", class: "q-select", checked: S.selected.has(q.id), "aria-label": `${t("select")}: ${q.text.slice(0, 40)}`,
+      onchange: (ev) => { if (ev.target.checked) S.selected.add(q.id); else S.selected.delete(q.id); renderGroupBar(); } });
+    const meta = [q.name || t("anonymous"), stepText(q.step, null, lang), fmt(q.at)];
+    const metaEl = el("div", { class: "q-meta" }, meta.join(" · "));
+    if (q.sourceSha256) metaEl.append(" · ", el("span", { title: q.sourceSha256, text: `${t("version")} ${q.sourceSha256.slice(0, 8)}` }));
+    metaEl.title = q.step;
+    return el("li", { class: [q.read && "read", q.hidden && "hidden-item", q.shown && !q.hidden && "shown"].filter(Boolean).join(" "), "data-item": q.id },
+      el("div", { class: "q-head" }, sel, el("p", { class: "q-text", text: q.text })),
+      Array.isArray(q.strokes) && q.strokes.length ? regionSvg(q.strokes) : null,
+      metaEl,
+      q.reply ? el("p", { class: "q-reply" }, el("strong", { text: t("replied") + " " }), q.reply.text, q.reply.public ? el("span", { class: "muted", text: " " + t("repliedAll") }) : null) : null,
+      el("div", { class: "row" }, flag("read"), flag("answered"), flag("shown"), flag("hidden"),
+        inGroup ? el("button", { type: "button", class: "small quiet", text: t("ungroup"), onclick: () => send({ t: "ungroup", item: q.id }) }) : null),
+      inGroup ? null : replyForm("q:" + q.id, q),
+    );
+  }
+
+  function renderGroupBar() {
+    const ids = [...S.selected].filter((id) => S.state.items.some((q) => q.id === id));
+    S.selected = new Set(ids);
+    $("btn-group").disabled = ids.length < 2;
+  }
+
+  function renderItems() {
+    const f = rememberFocus();
+    const visible = S.state.items.filter((q) => S.showHidden || !q.hidden);
+    $("n-items").textContent = `(${S.state.items.length})`;
+    // One entry per question, or per group of similar questions (placed by its newest question), newest first.
+    const groups = new Map(), entries = [];
+    for (const q of visible) {
+      if (q.group) {
+        if (!groups.has(q.group)) { const g = { group: q.group, items: [] }; groups.set(q.group, g); entries.push(g); }
+        groups.get(q.group).items.push(q);
+      } else entries.push({ item: q });
+    }
+    const last = (e) => (e.item ? e.item.at : e.items[e.items.length - 1].at);
+    entries.sort((a, b) => last(b).localeCompare(last(a)));
+    $("items").replaceChildren(...(entries.length ? entries.map((e) => {
+      if (e.item) return itemCard(e.item, false);
+      // a group: its questions, and one reply that reaches every asker (addressed to the first question,
+      // which is the one shown to everyone if the host chooses)
+      return el("li", { class: "group", "data-group": e.group },
+        el("p", { class: "group-head", text: t("similar")(e.items.length) }),
+        el("ul", { class: "list" }, ...e.items.map((q) => itemCard(q, true))),
+        replyForm("g:" + e.group, e.items[0]));
+    }) : [el("li", { class: "muted", text: t("noItems") })]));
+    renderGroupBar();
+    restoreFocus(f);
+  }
+
+  function renderConfused() {
+    const c = S.state.confused || {};
+    const rows = Object.entries(c).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    $("confused").replaceChildren(...(rows.length ? rows.map(([step, n]) => el("li", { title: step },
+      el("span", { text: stepText(step, null, lang) }), " ", el("strong", { text: t("people")(n) }))) : [el("li", { class: "muted", text: t("noConfused") })]));
   }
 
   function renderPolls() {
@@ -304,7 +416,7 @@ import { shareText } from "/join-core.js";
     }));
   }
 
-  function render() { renderStatus(); renderPeople(); renderItems(); renderPolls(); }
+  function render() { renderStatus(); renderPeople(); renderItems(); renderConfused(); renderPolls(); }
 
   async function download() {
     const res = await fetch(`/api/rooms/${encodeURIComponent(S.room)}/results`, { headers: { authorization: "Bearer " + S.admin } });
@@ -327,6 +439,14 @@ import { shareText } from "/join-core.js";
     $("copy-share").addEventListener("click", () => copy($("share-text").value));
     $("btn-download").addEventListener("click", download);
     $("chk-hidden").addEventListener("change", (ev) => { S.showHidden = ev.target.checked; if (S.state) renderItems(); });
+    $("btn-group").addEventListener("click", () => {
+      // keep the list's order: the first selected question (the oldest) gives the group it joins
+      const ids = S.state.items.filter((q) => S.selected.has(q.id)).map((q) => q.id);
+      if (ids.length < 2) return;
+      for (let i = 0; i < ids.length; i += 50) send({ t: "group", items: i === 0 ? ids.slice(0, 50) : [ids[0], ...ids.slice(i, i + 49)] });
+      S.selected.clear();
+      renderGroupBar();
+    });
     $("btn-activities").addEventListener("click", () => {
       let a; try { a = JSON.parse($("act-edit").value || "{}"); } catch { $("dash-error").textContent = t("badJson"); return; }
       $("dash-error").textContent = "";

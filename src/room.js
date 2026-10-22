@@ -4,7 +4,7 @@ import { DurableObject } from "cloudflare:workers";
 import * as L from "./limits.js";
 import {
   CLOSE, CLOSE_REASON, ERR, ProtocolError, parseFrame, checkLearnerMessage, checkTeacherMessage,
-  newLearnerKey, newItemId, sha256, sameDigest, RE_PID, RE_KEY,
+  newLearnerKey, newItemId, newGroupId, sha256, sameDigest, RE_PID, RE_KEY,
 } from "./protocol.js";
 
 // Errors after which a learner connection is closed with 4400 (protocol violations).
@@ -30,6 +30,7 @@ export class Room extends DurableObject {
     super(ctx, env);
     this.meta = null;
     this.tallies = null;    // activity id -> counts[], rebuilt lazily after waking
+    this.confused = null;   // step key -> number of participants who marked "I don't follow" there, rebuilt lazily
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"v":1,"t":"ping"}', '{"v":1,"t":"pong"}'));
     ctx.blockConcurrencyWhile(async () => { this.meta = (await ctx.storage.get("meta")) || null; });
   }
@@ -73,9 +74,40 @@ export class Room extends DurableObject {
     return [...m.values()].sort((a, b) => a.at.localeCompare(b.at));
   }
 
+  // Questions reach learners only when the host shows them (`mark shown`) or replies to everyone (`reply public`).
+  // Never who asked; a reply's text only if the host made it public.
   async shownItems() {
     return (await this.items()).filter((q) => q.shown && !q.hidden)
-      .map((q) => ({ id: q.id, activity: q.activity, step: q.step, text: q.text }));
+      .map((q) => ({ id: q.id, activity: q.activity, step: q.step, text: q.text, ...(q.reply?.public ? { reply: q.reply.text } : {}) }));
+  }
+
+  /** The replies to one participant's own questions (sent again on reconnect, so a reply reaches a learner who was away). */
+  async repliesFor(pid) {
+    return (await this.items()).filter((q) => q.pid === pid && q.reply).map((q) => this.replyMessage(q));
+  }
+
+  replyMessage(q) {
+    return { item: q.id, question: q.text, step: q.step, text: q.reply.text, public: q.reply.public, at: q.reply.at };
+  }
+
+  async getConfused() {
+    if (this.confused) return this.confused;
+    const c = {};
+    for (const rec of (await this.ctx.storage.list({ prefix: "c:" })).values()) c[rec.step] = (c[rec.step] || 0) + (rec.on ? 1 : 0);
+    this.confused = c;
+    return c;
+  }
+
+  /** Send to every admitted socket of one participant. */
+  toPid(pid, msg) {
+    for (const ws of this.ctx.getWebSockets("pid:" + pid)) {
+      if (ws.readyState === WebSocket.OPEN && ws.deserializeAttachment()?.status === "admitted") this.send(ws, msg);
+    }
+  }
+
+  async broadcastShown() {
+    const shown = await this.shownItems();
+    for (const l of this.learners()) if (l.deserializeAttachment()?.status === "admitted") this.send(l, { t: "shown", items: shown });
   }
 
   async getTallies() {
@@ -110,7 +142,7 @@ export class Room extends DurableObject {
     return {
       t: "state", room: m.room, key: m.key, window: m.window, graceHours: m.graceHours, expiresAt: this.expiresAt(),
       open: m.open, requireApproval: m.requireApproval, activities: m.activities || this.inferredActivities(),
-      people: await this.people(), items: await this.items(), tallies: await this.getTallies(),
+      people: await this.people(), items: await this.items(), tallies: await this.getTallies(), confused: await this.getConfused(),
     };
   }
 
@@ -123,7 +155,7 @@ export class Room extends DurableObject {
   inferredActivities() {
     const out = {};
     for (const [id, s] of Object.entries(this.meta.seen || {})) {
-      const step = s.kind === "qa" ? "*" : s.step;
+      const step = s.kind === "qa" || s.kind === "confused" ? "*" : s.step;
       (out[step] ||= []).push({ id, kind: s.kind });
     }
     return out;
@@ -156,7 +188,7 @@ export class Room extends DurableObject {
     this.meta = {
       room: spec.room, key: spec.key, keyGen: 1, adminHash, window: spec.window, graceHours: spec.graceHours,
       requireApproval: spec.requireApproval, open: true, activities: spec.activities, seen: {}, size: spec.size,
-      participants: 0, itemCount: 0, createdAt: new Date().toISOString(),
+      participants: 0, itemCount: 0, regionPoints: 0, createdAt: new Date().toISOString(),
     };
     await this.saveMeta();
     await this.scheduleAlarm();
@@ -177,6 +209,7 @@ export class Room extends DurableObject {
       await this.ctx.storage.deleteAll();
       this.meta = null;
       this.tallies = null;
+      this.confused = null;
       return;
     }
     if (now >= this.toMs()) for (const ws of this.learners()) this.closeWs(ws, CLOSE.ROOM_EXPIRED);
@@ -196,7 +229,13 @@ export class Room extends DurableObject {
     const responses = [];
     for (const q of await this.items()) {
       responses.push({ kind: "qa", activity: q.activity, step: q.step, pid: q.pid, ...(q.name ? { name: q.name } : {}),
-        at: q.at, id: q.id, text: q.text, read: q.read, answered: q.answered, shown: q.shown, hidden: q.hidden });
+        at: q.at, id: q.id, text: q.text, read: q.read, answered: q.answered, shown: q.shown, hidden: q.hidden,
+        ...(q.strokes ? { strokes: q.strokes } : {}), ...(q.sourceSha256 ? { sourceSha256: q.sourceSha256 } : {}),
+        ...(q.group ? { group: q.group } : {}), ...(q.reply ? { reply: q.reply } : {}) });
+    }
+    // "I don't follow": the marks that are on at export, one per participant and step
+    for (const c of (await this.ctx.storage.list({ prefix: "c:" })).values()) {
+      if (c.on) responses.push({ kind: "confused", activity: c.activity, step: c.step, pid: c.pid, at: c.at });
     }
     const votes = [...(await this.ctx.storage.list({ prefix: "v:" })).values()];
     for (const v of votes) responses.push({ kind: "poll", activity: v.activity, step: v.step, pid: v.pid, at: v.at, choice: v.choice });
@@ -240,9 +279,10 @@ export class Room extends DurableObject {
     this.ctx.acceptWebSocket(server, ["learner", "pid:" + pid]);
     server.serializeAttachment({ role: "learner", pid, status: p.status, keyGen: m.keyGen,
       tokens: L.RATE_BURST, last: now, drops: 0, since: new Date(now).toISOString() });
+    const replies = p.status === "admitted" ? await this.repliesFor(pid) : [];
     this.send(server, {
       t: "welcome", room: m.room, pid, status: p.status, window: m.window,
-      shown: p.status === "admitted" ? await this.shownItems() : [], limits: L.publicLimits(),
+      shown: p.status === "admitted" ? await this.shownItems() : [], limits: L.publicLimits(), ...(replies.length ? { replies } : {}),
     });
     this.toTeachers({ t: "people", ...(await this.people()) });
     return new Response(null, { status: 101, webSocket: client });
@@ -288,7 +328,12 @@ export class Room extends DurableObject {
 
     let m;
     try {
-      m = checkLearnerMessage(parseFrame(raw, L.MAX_LEARNER_MESSAGE_BYTES));
+      // An `ask` may carry a region (up to MAX_ASK_MESSAGE_BYTES); every other learner message stays small.
+      const f = parseFrame(raw, L.MAX_ASK_MESSAGE_BYTES);
+      if (f.t !== "ask" && (raw.length > L.MAX_LEARNER_MESSAGE_BYTES || new TextEncoder().encode(raw).length > L.MAX_LEARNER_MESSAGE_BYTES)) {
+        throw new ProtocolError(ERR.TOO_LARGE, `message larger than ${L.MAX_LEARNER_MESSAGE_BYTES} bytes`);
+      }
+      m = checkLearnerMessage(f);
     } catch (e) {
       const code = e instanceof ProtocolError ? e.code : ERR.BAD_MESSAGE;
       this.send(ws, { t: "error", code, ...(e.ref ? { ref: e.ref } : {}) });
@@ -316,7 +361,7 @@ export class Room extends DurableObject {
       return reply(this.activitiesMessage());
     }
 
-    const kind = m.t === "ask" ? "qa" : "poll";
+    const kind = m.t === "ask" ? "qa" : m.t === "confused" ? "confused" : "poll";
     const known = this.findActivity(m.activity);
     if (this.meta.activities) {
       if (!known) return fail(ERR.UNKNOWN_ACTIVITY);
@@ -337,13 +382,35 @@ export class Room extends DurableObject {
     if (m.t === "ask") {
       if (p.asked >= L.MAX_QUESTIONS_PER_PARTICIPANT) return fail(ERR.QUOTA_EXCEEDED);
       if (this.meta.itemCount >= L.MAX_ITEMS) return fail(ERR.ROOM_LIMIT);
+      const points = m.strokes ? m.strokes.reduce((n, s) => n + s.length, 0) : 0;
+      if (points && (this.meta.regionPoints || 0) + points > L.MAX_REGION_POINTS_PER_ROOM) return fail(ERR.ROOM_LIMIT);
       const item = { id: newItemId(), activity: m.activity, step: m.step, text: m.text, pid: a.pid, name: p.name || "",
-        at, read: false, answered: false, shown: false, hidden: false };
+        at, read: false, answered: false, shown: false, hidden: false,
+        ...(m.strokes ? { strokes: m.strokes } : {}), ...(m.sourceSha256 ? { sourceSha256: m.sourceSha256 } : {}) };
       p.asked++;
       this.meta.itemCount++;
+      this.meta.regionPoints = (this.meta.regionPoints || 0) + points;
       await this.ctx.storage.put({ ["q:" + item.id]: item, ["p:" + a.pid]: p, meta: this.meta });
       reply({ t: "ack", item: item.id });
       this.toTeachers({ t: "item", item });
+      return;
+    }
+    if (m.t === "confused") {
+      // one mark per participant and step; tapping again with on:false takes it back. Counted per step, no text.
+      const ckey = "c:" + a.pid + ":" + m.step;
+      const prev = await this.ctx.storage.get(ckey);
+      const counts = await this.getConfused();
+      if (!prev) {
+        if ((p.confusedSteps || 0) >= L.MAX_CONFUSED_STEPS_PER_PARTICIPANT) return fail(ERR.QUOTA_EXCEEDED);
+        if (!(m.step in counts) && Object.keys(counts).length >= L.MAX_CONFUSED_STEPS) return fail(ERR.ROOM_LIMIT);
+      }
+      if (prev && prev.on === m.on) return reply({ t: "ack" });   // nothing changed
+      const rec = { activity: m.activity, step: m.step, pid: a.pid, on: m.on, at };
+      if (!prev) p.confusedSteps = (p.confusedSteps || 0) + 1;
+      await this.ctx.storage.put({ [ckey]: rec, ["p:" + a.pid]: p });
+      counts[m.step] = Math.max(0, (counts[m.step] || 0) + (m.on ? 1 : 0) - (prev?.on ? 1 : 0));
+      reply({ t: "ack" });
+      this.toTeachers({ t: "confused", step: m.step, count: counts[m.step] });
       return;
     }
     // vote: one per participant per poll; the last one counts
@@ -423,10 +490,70 @@ export class Room extends DurableObject {
         await this.ctx.storage.put("q:" + item.id, item);
         reply({ t: "ack" });
         this.toTeachers({ t: "item", item });
-        if (wasShown !== nowShown) {
-          const shown = await this.shownItems();
-          for (const l of this.learners()) if (l.deserializeAttachment()?.status === "admitted") this.send(l, { t: "shown", items: shown });
+        if (wasShown !== nowShown) await this.broadcastShown();
+        return;
+      }
+      case "reply": {
+        // A short reply to one question and every question grouped with it. It goes to each asker only;
+        // with public: true the addressed question is also shown to everyone together with the reply.
+        const item = await this.ctx.storage.get("q:" + m.item);
+        if (!item) return reply({ t: "error", code: ERR.NOT_FOUND });
+        const wasShown = item.shown && !item.hidden;
+        if (m.public && !wasShown && (await this.shownItems()).length >= L.MAX_SHOWN) return reply({ t: "error", code: ERR.ROOM_LIMIT });
+        const at = new Date().toISOString();
+        const targets = item.group ? (await this.items()).filter((q) => q.group === item.group) : [item];
+        const puts = {};
+        for (const q of targets) {
+          const isItem = q.id === item.id;
+          // a reply already made public stays public unless the host replies to that question again
+          q.reply = { text: m.text, at, public: isItem ? m.public : !!(q.reply?.public) };
+          q.answered = true;
+          if (isItem && m.public) { q.shown = true; q.hidden = false; }
+          puts["q:" + q.id] = q;
         }
+        await this.ctx.storage.put(puts);
+        reply({ t: "ack" });
+        for (const q of targets) {
+          this.toTeachers({ t: "item", item: q });
+          this.toPid(q.pid, { t: "reply", ...this.replyMessage(q) });
+        }
+        if (m.public || wasShown) await this.broadcastShown();
+        return;
+      }
+      case "group": {
+        const found = [];
+        for (const id of m.items) {
+          const q = await this.ctx.storage.get("q:" + id);
+          if (!q) return reply({ t: "error", code: ERR.NOT_FOUND });
+          found.push(q);
+        }
+        // join the first question's group (or a new one); questions already in another group bring that whole group
+        const gid = found[0].group || newGroupId();
+        const others = new Set(found.map((q) => q.group).filter((g) => g && g !== gid));
+        const all = await this.items();
+        const changed = new Map();
+        for (const q of found) changed.set(q.id, q);
+        for (const q of all) if (others.has(q.group) && !changed.has(q.id)) changed.set(q.id, q);
+        const puts = {};
+        for (const q of changed.values()) { if (q.group !== gid) { q.group = gid; puts["q:" + q.id] = q; } }
+        if (Object.keys(puts).length) await this.ctx.storage.put(puts);
+        reply({ t: "ack" });
+        for (const k of Object.keys(puts)) this.toTeachers({ t: "item", item: puts[k] });
+        return;
+      }
+      case "ungroup": {
+        const item = await this.ctx.storage.get("q:" + m.item);
+        if (!item) return reply({ t: "error", code: ERR.NOT_FOUND });
+        if (!item.group) return reply({ t: "ack" });
+        const gid = item.group;
+        delete item.group;
+        const puts = { ["q:" + item.id]: item };
+        // a group of one is no group
+        const rest = (await this.items()).filter((q) => q.group === gid && q.id !== item.id);
+        if (rest.length === 1) { delete rest[0].group; puts["q:" + rest[0].id] = rest[0]; }
+        await this.ctx.storage.put(puts);
+        reply({ t: "ack" });
+        for (const k of Object.keys(puts)) this.toTeachers({ t: "item", item: puts[k] });
         return;
       }
       case "activities":
@@ -457,7 +584,8 @@ export class Room extends DurableObject {
         const a = ws.deserializeAttachment();
         a.status = "admitted";
         ws.serializeAttachment(a);
-        this.send(ws, { t: "admitted", shown });
+        const replies = await this.repliesFor(id);
+        this.send(ws, { t: "admitted", shown, ...(replies.length ? { replies } : {}) });
       }
     }
   }

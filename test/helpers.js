@@ -47,7 +47,11 @@ function check(v, s, p, errs) {
   }
   if (Array.isArray(v)) {
     if (s.maxItems !== undefined && v.length > s.maxItems) errs.push(`${p}: too many items`);
-    if (s.items) v.forEach((x, i) => check(x, s.items, `${p}[${i}]`, errs));
+    if (s.minItems !== undefined && v.length < s.minItems) errs.push(`${p}: too few items`);
+    const pre = s.prefixItems || [];
+    pre.forEach((sub, i) => { if (i < v.length) check(v[i], sub, `${p}[${i}]`, errs); });
+    if (s.items === false) { if (v.length > pre.length) errs.push(`${p}: too many items`); }
+    else if (s.items) v.forEach((x, i) => { if (i >= pre.length) check(x, s.items, `${p}[${i}]`, errs); });
   }
   if (typeOf(v) === "object") {
     for (const r of s.required || []) if (!(r in v)) errs.push(`${p}: missing ${r}`);
