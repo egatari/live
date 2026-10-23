@@ -30,6 +30,7 @@ function check(v, s, p, errs) {
     if (ok.length !== 1) errs.push(`${p}: matches ${ok.length} of oneOf`);
     return;
   }
+  if (s.not) { const e = []; check(v, s.not, p, e); if (e.length === 0) errs.push(`${p}: matches a schema it must not`); }
   if ("const" in s && v !== s.const) errs.push(`${p}: expected ${JSON.stringify(s.const)}`);
   if (s.enum && !s.enum.includes(v)) errs.push(`${p}: not in enum`);
   if (s.type) {

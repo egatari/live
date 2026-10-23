@@ -1686,8 +1686,7 @@
       "answered",
       "shown",
       "hidden"
-     ],
-     "additionalProperties": false
+     ]
     },
     {
      "type": "object",
@@ -1724,8 +1723,7 @@
       "pid",
       "at",
       "choice"
-     ],
-     "additionalProperties": false
+     ]
     },
     {
      "type": "object",
@@ -1753,10 +1751,143 @@
       "pid",
       "at"
      ],
-     "additionalProperties": false,
      "description": "an \"I don't follow\" mark that was on at export"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "kind": {
+       "type": "string",
+       "not": {
+        "enum": [
+         "qa",
+         "poll",
+         "confused"
+        ]
+       }
+      }
+     },
+     "required": [
+      "kind"
+     ],
+     "description": "an entry of a kind this version does not know; ignore it (Readers MUST ignore unknown members and unknown kinds (live.md \u00a73).)"
     }
-   ]
+   ],
+   "description": "A response in results. Readers MUST ignore unknown members and unknown kinds (live.md \u00a73)."
+  },
+  "resultsActivity": {
+   "oneOf": [
+    {
+     "type": "object",
+     "properties": {
+      "id": {
+       "$ref": "#/$defs/activityId"
+      },
+      "kind": {
+       "const": "qa"
+      },
+      "label": {
+       "type": "string",
+       "maxLength": 80,
+       "description": "display text for the step, e.g. \"Slide 4 'XML', step 1\" (optional; text only; the step key stays the key)"
+      }
+     },
+     "required": [
+      "id",
+      "kind"
+     ]
+    },
+    {
+     "type": "object",
+     "properties": {
+      "id": {
+       "$ref": "#/$defs/activityId"
+      },
+      "kind": {
+       "const": "poll"
+      },
+      "prompt": {
+       "type": "string",
+       "maxLength": 300
+      },
+      "choices": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "maxLength": 100
+       },
+       "maxItems": 12
+      },
+      "label": {
+       "type": "string",
+       "maxLength": 80,
+       "description": "display text for the step, e.g. \"Slide 4 'XML', step 1\" (optional; text only; the step key stays the key)"
+      }
+     },
+     "required": [
+      "id",
+      "kind"
+     ]
+    },
+    {
+     "type": "object",
+     "properties": {
+      "id": {
+       "$ref": "#/$defs/activityId"
+      },
+      "kind": {
+       "const": "confused"
+      },
+      "label": {
+       "type": "string",
+       "maxLength": 80,
+       "description": "display text for the step, e.g. \"Slide 4 'XML', step 1\" (optional; text only; the step key stays the key)"
+      }
+     },
+     "required": [
+      "id",
+      "kind"
+     ],
+     "description": "a one-tap \"I don't follow\" at the current step, without text; counted per step"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "id": {
+       "$ref": "#/$defs/activityId"
+      },
+      "kind": {
+       "type": "string",
+       "not": {
+        "enum": [
+         "qa",
+         "poll",
+         "confused"
+        ]
+       }
+      }
+     },
+     "required": [
+      "id",
+      "kind"
+     ],
+     "description": "an activity of a kind this version does not know; ignore it (Readers MUST ignore unknown members and unknown kinds (live.md \u00a73).)"
+    }
+   ],
+   "description": "An activity in results. Readers MUST ignore unknown members and unknown kinds (live.md \u00a73)."
+  },
+  "resultsActivities": {
+   "type": "object",
+   "propertyNames": {
+    "$ref": "#/$defs/stepKey"
+   },
+   "additionalProperties": {
+    "type": "array",
+    "items": {
+     "$ref": "#/$defs/resultsActivity"
+    }
+   },
+   "description": "extensions.live.activities as written to results. Readers MUST ignore unknown members and unknown kinds (live.md \u00a73)."
   },
   "results": {
    "type": "object",
@@ -1771,7 +1902,7 @@
      "$ref": "#/$defs/window"
     },
     "activities": {
-     "$ref": "#/$defs/activities"
+     "$ref": "#/$defs/resultsActivities"
     },
     "responses": {
      "type": "array",
@@ -1791,7 +1922,7 @@
     "responses",
     "exportedAt"
    ],
-   "additionalProperties": false
+   "description": "The results file. Readers MUST ignore unknown members and unknown kinds (live.md \u00a73)."
   },
   "httpError": {
    "type": "object",

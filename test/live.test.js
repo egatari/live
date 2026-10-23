@@ -13,7 +13,7 @@ import {
 const fixtures = import.meta.glob("../protocol/fixtures/**/*.json", { eager: true, import: "default" });
 const FIXTURE_DEF = {
   learner: "learnerToServer", "server-learner": "serverToLearner", teacher: "teacherToServer", "server-teacher": "serverToTeacher",
-  "http/create-request": "createRequest", "http/create-request-setup": "createRequest", "http/create-response": "createResponse", "http/results": "results", "http/error": "httpError",
+  "http/create-request": "createRequest", "http/create-request-setup": "createRequest", "http/create-response": "createResponse", "http/results": "results", "http/results-future": "results", "http/error": "httpError",
   setup: "setupPayload",
 };
 const defFor = (path) => {
@@ -38,6 +38,22 @@ describe("protocol files", () => {
       expect(def, p).toBeTruthy();
       expect(validate(fixtures[p], def), p).toEqual([]);
     }
+  });
+  it("results readers tolerate unknown members and kinds, but known fields stay strict (live §3)", () => {
+    const base = fixtures["../protocol/fixtures/http/results.json"];
+    const future = fixtures["../protocol/fixtures/http/results-future.json"];
+    expect(base.responses.some((r) => r.kind === "qa" && r.reply && r.group && r.strokes && r.sourceSha256)).toBe(true);
+    expect(base.responses.some((r) => r.kind === "confused")).toBe(true);
+    expect(Object.values(base.activities).flat().some((a) => a.kind === "confused")).toBe(true);
+    expect(validate(base, "results")).toEqual([]);
+    expect(validate(future, "results")).toEqual([]);
+    const bad = (mut) => { const c = structuredClone(base); mut(c); return validate(c, "results"); };
+    expect(bad((c) => { c.responses[0].text = "x".repeat(501); })).not.toEqual([]);
+    expect(bad((c) => { c.responses[3].choice = 12; })).not.toEqual([]);
+    expect(bad((c) => { c.responses[2].pid = 5; })).not.toEqual([]);
+    expect(bad((c) => { c.activities["*"][0].label = "x".repeat(81); })).not.toEqual([]);
+    expect(bad((c) => { delete c.responses[0].id; })).not.toEqual([]);
+    expect(bad((c) => { c.responses[0].kind = 7; })).not.toEqual([]);
   });
   it("close-codes.json matches the server's close codes", () => {
     const table = Object.fromEntries(closeCodes.codes.map((c) => [c.name, c.code]));
