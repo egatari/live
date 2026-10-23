@@ -73,3 +73,7 @@ button.confused[aria-pressed="true"] { background: var(--accent); color: var(--b
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: no-preference) { .bar .dot { transition: background-color 0.2s; } }
+
+/* Pre-release badge: remove when Live is announced */
+.prerelease { display: inline-block; vertical-align: middle; margin-left: 0.5em; padding: 0.1em 0.5em; border: 1px solid currentColor; border-radius: 0.3em; font-size: 0.6em; font-weight: normal; color: #8a5a00; }
+@media (prefers-color-scheme: dark) { .prerelease { color: #f0b860; } }
