@@ -90,10 +90,15 @@ export class Room extends DurableObject {
     return { item: q.id, question: q.text, step: q.step, text: q.reply.text, public: q.reply.public, at: q.reply.at };
   }
 
+  /** True if the teacher declared `id` as an "I don't follow" activity. A room that declared nothing has none (live §3). */
+  isDeclaredConfused(id) { return this.findActivity(id)?.kind === "confused"; }
+
   async getConfused() {
     if (this.confused) return this.confused;
     const c = {};
-    for (const rec of (await this.ctx.storage.list({ prefix: "c:" })).values()) c[rec.step] = (c[rec.step] || 0) + (rec.on ? 1 : 0);
+    for (const rec of (await this.ctx.storage.list({ prefix: "c:" })).values()) {
+      if (this.isDeclaredConfused(rec.activity)) c[rec.step] = (c[rec.step] || 0) + (rec.on ? 1 : 0);
+    }
     this.confused = c;
     return c;
   }
@@ -152,10 +157,16 @@ export class Room extends DurableObject {
     return { t: "activities", activities: m.activities || this.inferredActivities(), declared: !!m.activities };
   }
 
+  /**
+   * For a room that declared no activities: the questions and polls the lesson players sent (their lesson file
+   * declares them). Never an "I don't follow": the service does not infer one (live §3); a `confused` entry in
+   * `seen` (rooms stored between bb68da8 and this change accepted one) is left out.
+   */
   inferredActivities() {
     const out = {};
     for (const [id, s] of Object.entries(this.meta.seen || {})) {
-      const step = s.kind === "qa" || s.kind === "confused" ? "*" : s.step;
+      if (s.kind !== "qa" && s.kind !== "poll") continue;
+      const step = s.kind === "qa" ? "*" : s.step;
       (out[step] ||= []).push({ id, kind: s.kind });
     }
     return out;
@@ -241,11 +252,15 @@ export class Room extends DurableObject {
     }
     const votes = [...(await this.ctx.storage.list({ prefix: "v:" })).values()];
     for (const v of votes) responses.push({ kind: "poll", activity: v.activity, step: v.step, pid: v.pid, at: v.at, choice: v.choice });
-    responses.sort((a, b) => a.at.localeCompare(b.at));
-    return json({
-      v: 1, room: this.meta.room, window: this.meta.window,
-      activities: this.meta.activities || this.inferredActivities(), responses, exportedAt: new Date().toISOString(),
-    });
+    // Only responses to the activities listed (live §3: nothing the teacher did not declare). This leaves out
+    // "I don't follow" marks in a room that declared none (accepted before this change) and responses to an
+    // activity the teacher has since removed by setting new activities (kept in storage; setting it again brings them back).
+    const activities = this.meta.activities || this.inferredActivities();
+    const kinds = new Map();
+    for (const list of Object.values(activities)) for (const a of list) kinds.set(a.id, a.kind);
+    const listed = responses.filter((r) => kinds.get(r.activity) === r.kind);
+    listed.sort((a, b) => a.at.localeCompare(b.at));
+    return json({ v: 1, room: this.meta.room, window: this.meta.window, activities, responses: listed, exportedAt: new Date().toISOString() });
   }
 
   // ------------------------------------------------------------------ joining
@@ -371,6 +386,9 @@ export class Room extends DurableObject {
       if (known.step !== "*" && known.step !== m.step) return fail(ERR.UNKNOWN_ACTIVITY);
       if (kind === "poll" && m.choice >= known.choices.length) return fail(ERR.BAD_CHOICE);
     } else {
+      // No activities declared: questions and polls are taken from the lesson players (their file declares them),
+      // but "I don't follow" never is: the service does not infer an activity the teacher did not declare (live §3).
+      if (kind === "confused") return fail(ERR.UNKNOWN_ACTIVITY);
       const seen = this.meta.seen;
       if (seen[m.activity] && seen[m.activity].kind !== kind) return fail(ERR.WRONG_KIND);
       if (!seen[m.activity]) {
@@ -562,6 +580,7 @@ export class Room extends DurableObject {
         meta.activities = m.activities;
         await this.saveMeta();
         this.tallies = null;
+        this.confused = null;   // counted only for declared "I don't follow" activities
         reply({ t: "ack" });
         for (const l of this.learners()) {
           const la = l.deserializeAttachment();

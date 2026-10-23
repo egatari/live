@@ -508,7 +508,59 @@ describe("questions on the join page: I don't follow, replies", () => {
   it("viewOf offers a confused activity declared for the whole lesson (this page has no step on screen)", () => {
     expect(viewOf(activities, true).confused).toEqual({ id: "cf", step: "*" });
     expect(viewOf({ "s:1": [{ id: "cf", kind: "confused" }] }, true).confused).toBeNull();
-    expect(viewOf({}, false).confused).toEqual({ id: "confused", step: "*" });   // no activities set: any id is accepted
+    // no activities set: questions go to "qa", but no "I don't follow" is offered (the room does not infer one)
+    expect(viewOf({}, false)).toEqual({ qa: { id: "qa", step: "*" }, confused: null, polls: [] });
+    expect(viewOf({ "*": [{ id: "qa", kind: "qa" }] }, true).confused).toBeNull();
+    // before the room has said which activities it has, nothing is offered
+    expect(viewOf({}, null)).toEqual({ qa: null, confused: null, polls: [] });
+    expect(viewOf(activities, undefined)).toEqual({ qa: null, confused: null, polls: [] });
+  });
+
+  it("offers わからない only after the room declared a confused activity; a tap before the activities arrive sends nothing", () => {
+    const socks = [];
+    const { client, clock } = makeClient({ WebSocket: fakeSocketClass(socks) });
+    client.join();
+    socks[0].open();
+    socks[0].recv(welcome(clock));
+    expect(client.snapshot().view.confused).toBeNull();
+    expect(client.snapshot().view.qa).toBeNull();
+    expect(client.confused()).toBe(false);
+    expect(socks[0].sent.filter((m) => m.t === "confused")).toEqual([]);
+    // a room without activities: questions, but no わからない
+    const req = socks[0].sent.find((m) => m.t === "activities");
+    socks[0].recv({ t: "activities", ref: req.ref, activities: {}, declared: false });
+    expect(client.snapshot().view.confused).toBeNull();
+    expect(client.snapshot().view.qa).toEqual({ id: "qa", step: "*" });
+    expect(client.confused()).toBe(false);
+    // the teacher declares one: now it is offered and sent with the declared id and step "*"
+    socks[0].recv({ t: "activities", activities, declared: true });
+    expect(client.snapshot().view.confused).toEqual({ id: "cf", step: "*" });
+    expect(client.confused()).toBe(true);
+    expect(socks[0].sent.filter((m) => m.t === "confused")).toMatchObject([{ activity: "cf", step: "*", on: true }]);
+    // after a reconnect nothing is offered until the room answers again
+    socks[0].closeWith(1006);
+    clock.advance(60_000);
+    socks[1].open();
+    socks[1].recv(welcome(clock));
+    expect(client.snapshot().view.confused).toBeNull();
+  });
+
+  it("a room with no activities: the page connects with questions but without わからない", async () => {
+    const r = await createRoom();
+    const { client, events } = makeClient({ room: r.room, key: r.key, ...realDeps([]) });
+    client.join();
+    const s = await waitFor(events, (_, ev) => ev.some((e) => e.ev && e.ev.type === "activities"));
+    expect(s.state).toBe("connected");
+    expect(s.view).toEqual({ qa: { id: "qa", step: "*" }, confused: null, polls: [] });
+    expect(client.confused()).toBe(false);
+    client.leave();
+  });
+
+  it("join.js shows the わからない box only when the view offers it", async () => {
+    const join = await (await SELF.fetch(ORIGIN + "/join.js")).text();
+    expect(join).toContain('$("confused-box").hidden = !(s.admitted && view.confused);');
+    const html = await (await SELF.fetch(ORIGIN + "/join")).text();
+    expect(html).toContain('<div id="confused-box" class="card" hidden>');
   });
 
   it("a tap marks, another takes it back; the host's reply reaches only this page, and again after a reload", async () => {
@@ -518,7 +570,8 @@ describe("questions on the join page: I don't follow, replies", () => {
     const { client, events } = makeClient({ room: r.room, key: r.key, ...realDeps(urls) });
     const other = makeClient({ room: r.room, key: r.key, ...realDeps(urls2) });
     client.join(); other.client.join();
-    let s = await waitFor(events, (x) => x.state === "connected" && !!x.view.confused);
+    // wait for the room's activities (the view offers わからない only once they have arrived)
+    let s = await waitFor(events, (x) => x.state === "connected" && !!x.view.confused && x.view.confused.id === "cf");
     await waitFor(other.events, (x) => x.state === "connected" && !!x.view.confused);
     expect(client.confused()).toBe(true);
     await waitFor(events, (_, ev) => ev.some((e) => e.ev && e.ev.type === "ack" && e.ev.kind === "confused"));

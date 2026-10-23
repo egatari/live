@@ -170,11 +170,15 @@ export function stepText(step, label, lang = "ja") {
  * the room declares are listed, in declaration order, each labelled with its prompt and its step (the
  * activity's `label` if it has one, see stepText).
  * Polls without choices (inferred from votes, when the teacher set no activities) cannot be shown.
- * If the room declares nothing, any activity id is accepted, so questions go to "qa" under "*".
+ * If the room declares nothing, it takes questions under any id, so questions go to "qa" under "*"; it never
+ * takes "I don't follow" (live §3), so the page offers it only for a `confused` activity declared under "*".
+ * `declared` is null until the room has answered `{t:"activities"}`: until then the page offers nothing, so
+ * that a tap right after joining is not sent to an activity the room does not have.
  */
 export function viewOf(activities, declared) {
   const polls = [];
   let qa = null, confused = null;
+  if (declared !== true && declared !== false) return { qa, confused, polls };
   for (const [step, list] of Object.entries(activities || {})) {
     if (!Array.isArray(list)) continue;
     for (const a of list) {
@@ -189,7 +193,6 @@ export function viewOf(activities, declared) {
     }
   }
   if (!qa && !declared) qa = { id: "qa", step: "*" };
-  if (!confused && !declared) confused = { id: "confused", step: "*" };
   return { qa, confused, polls };
 }
 
@@ -218,7 +221,7 @@ export class JoinClient {
     this.admitted = false;
     this.shown = [];
     this.activities = {};
-    this.declared = false;
+    this.declared = null;     // null until the room answers {t:"activities"}; then whether the teacher set activities
     this.votes = {};          // poll id -> {choice, ok}
     this.replies = {};        // item id -> the host's reply to one of this learner's questions
     this.confusedOn = false;  // this learner's "I don't follow" (step "*": this page has no step on screen)
@@ -353,6 +356,9 @@ export class JoinClient {
     this.ws = s;
     this.admitted = false;
     this.pending = {};
+    // the activities may have changed while this page was away: offer nothing until the room says again
+    this.activities = {};
+    this.declared = null;
     this.set("connecting");
     s.onmessage = (ev) => { if (this.ws === s) this.onMessage(ev.data); };
     s.onopen = () => { if (this.ws === s) this.timers.ping = this.d.setInterval(() => this.send({ t: "ping" }), PING_MS); };

@@ -45,7 +45,11 @@ describe("protocol files", () => {
     expect(table).toEqual(server);
   });
   it("learner fixtures are accepted by a live room", async () => {
-    const r = await createRoom();
+    // the activities the fixtures use (a confused is accepted only when declared, live §3)
+    const r = await createRoom({ activities: {
+      "*": [{ id: "qa", kind: "qa" }, { id: "cf", kind: "confused" }],
+      "s-k3f9q2:2": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b", "c"] }],
+    } });
     const c = await joinLearner(r);
     await c.next("welcome");
     for (const name of ["name", "ask", "ask-region", "confused"]) {

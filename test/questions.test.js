@@ -2,7 +2,7 @@
 // Questions anchored to a step (region, source hash), "I don't follow" (kind confused), and the host's
 // grouping and short replies. Learners never see other learners' questions unless the host shows them
 // (mark shown) or replies to everyone (reply public).
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env, runInDurableObject, evictDurableObject } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import * as L from "../src/limits.js";
 import { CLOSE } from "../src/protocol.js";
@@ -187,16 +187,129 @@ describe("I don't follow (confused)", () => {
     expect(await c.closedWith()).toBe(CLOSE.BAD_MESSAGE);
   });
 
-  it("without declared activities the kind is learned and listed under '*'", async () => {
+  it("without declared activities a confused is refused with unknown_activity, the socket stays open, nothing is recorded", async () => {
+    const r = await createRoom();
+    const t = await joinTeacher(r);
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(confused("s1:1", { activity: "dunno", ref: "c1" }));
+    const err = await c.next("error");
+    ok(err, "serverToLearner");
+    expect(err).toMatchObject({ code: "unknown_activity", ref: "c1" });
+    c.send(confused("*", { activity: "confused" }));    // the id the join page used to infer
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    // not fatal: the connection stays and a question still goes through
+    c.send(ask("still here?", { ref: "a1" }));
+    await c.next("ack");
+    expect(c.closed).toBeNull();
+    await refill(r.room);
+    c.send({ v: 1, t: "activities", ref: "x1" });
+    const acts = await c.next("activities");
+    expect(acts.declared).toBe(false);
+    expect(acts.activities).toEqual({ "*": [{ id: "qa", kind: "qa" }] });
+    t.send({ v: 1, t: "state" });
+    const st = await t.next("state");
+    expect(st.confused).toEqual({});
+    expect(JSON.stringify(st.activities)).not.toContain("confused");
+    const j = await (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    ok(j, "results");
+    expect(j.activities).toEqual({ "*": [{ id: "qa", kind: "qa" }] });
+    expect(j.responses.map((x) => x.kind)).toEqual(["qa"]);
+    expect(await runInDurableObject(roomStub(r.room), async (_, state) => [...(await state.storage.list({ prefix: "c:" })).keys()])).toEqual([]);
+    c.close(); t.close();
+  });
+
+  it("in a room that declared activities but no confused, a confused is refused and the socket stays open", async () => {
+    const r = await createRoom({ activities: { "*": [{ id: "qa", kind: "qa" }] } });
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(confused("*", { activity: "confused", ref: "c1" }));
+    expect(await c.next("error")).toMatchObject({ code: "unknown_activity", ref: "c1" });
+    c.send({ v: 1, t: "ping" });
+    await c.next("pong");
+    expect(c.closed).toBeNull();
+    const j = await (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    expect(j.responses).toEqual([]);
+    c.close();
+  });
+
+  it("results and the host's counts leave out an activity the teacher no longer declares", async () => {
+    const r = await createRoom({ activities: ACTS });
+    const t = await joinTeacher(r);
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(confused("s1:1"));
+    await c.next("ack");
+    expect((await t.next("confused")).count).toBe(1);
+    t.send({ v: 1, t: "activities", ref: "x1", activities: { "*": [{ id: "qa", kind: "qa" }] } });
+    const st = await t.next("state");
+    expect(st.confused).toEqual({});
+    const results = async () => (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    let j = await results();
+    ok(j, "results");
+    expect(j.responses.filter((x) => x.kind === "confused")).toEqual([]);
+    c.send(confused("s1:2"));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    // declared again: the marks kept in the room are counted again
+    t.send({ v: 1, t: "activities", ref: "x2", activities: ACTS });
+    expect((await t.next("state", (m) => !!m.activities["*"].find((a) => a.id === "cf"))).confused).toEqual({ "s1:1": 1 });
+    j = await results();
+    expect(j.responses.filter((x) => x.kind === "confused").map((x) => x.step)).toEqual(["s1:1"]);
+    c.close(); t.close();
+  });
+
+  it("a room stored by b9eea16 (no activities declared) still takes questions and votes, and never shows a confused", async () => {
+    const r = await createRoom();
+    // the meta exactly as b9eea16 stored it: no activities, `seen`, no regionPoints
+    await runInDurableObject(roomStub(r.room), async (inst, state) => {
+      const m = inst.meta;
+      await state.storage.put("meta", { room: m.room, key: m.key, keyGen: 1, adminHash: m.adminHash, window: m.window, graceHours: m.graceHours,
+        requireApproval: m.requireApproval, open: true, activities: undefined, seen: {}, size: m.size, participants: 0, itemCount: 0, createdAt: m.createdAt });
+    });
+    await evictDurableObject(roomStub(r.room));
+    const t = await joinTeacher(r);
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("old room?", { ref: "a1" }));
+    await c.next("ack");
+    c.send({ v: 1, t: "vote", ref: "v1", activity: "p1", step: "s1:2", choice: 1 });
+    await c.next("ack");
+    c.send(confused("*", { activity: "confused", ref: "c1" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    expect(c.closed).toBeNull();
+    const j = await (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    ok(j, "results");
+    expect(j.activities).toEqual({ "*": [{ id: "qa", kind: "qa" }], "s1:2": [{ id: "p1", kind: "poll" }] });
+    expect(j.responses.map((x) => x.kind).sort()).toEqual(["poll", "qa"]);
+    c.close(); t.close();
+  });
+
+  it("a room that inferred a confused before this change (seen + a stored mark) no longer lists or exports it", async () => {
     const r = await createRoom();
     const c = await joinLearner(r);
     await c.next("welcome");
-    c.send(confused("s1:1", { activity: "dunno" }));
+    c.send(ask("before", { ref: "a1" }));
     await c.next("ack");
-    c.send({ v: 1, t: "activities" });
-    const acts = await c.next("activities");
-    expect(acts.activities["*"]).toEqual([{ id: "dunno", kind: "confused" }]);
-    c.close();
+    await runInDurableObject(roomStub(r.room), async (inst, state) => {
+      inst.meta.seen.confused = { kind: "confused", step: "*" };
+      await inst.saveMeta();
+      await state.storage.put("c:" + c.pid + ":*", { activity: "confused", step: "*", pid: c.pid, on: true, at: new Date().toISOString() });
+    });
+    await evictDurableObject(roomStub(r.room));
+    const t = await joinTeacher(r);
+    expect(t.state.confused).toEqual({});
+    expect(t.state.activities).toEqual({ "*": [{ id: "qa", kind: "qa" }] });
+    const d = await joinLearner(r);
+    await d.next("welcome");
+    d.send({ v: 1, t: "activities", ref: "x1" });
+    expect((await d.next("activities")).activities).toEqual({ "*": [{ id: "qa", kind: "qa" }] });
+    d.send(confused("*", { activity: "confused", ref: "c2" }));
+    expect((await d.next("error")).code).toBe("unknown_activity");
+    const j = await (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+    ok(j, "results");
+    expect(j.activities).toEqual({ "*": [{ id: "qa", kind: "qa" }] });
+    expect(j.responses.map((x) => x.kind)).toEqual(["qa"]);
+    c.close(); d.close(); t.close();
   });
 
   it("caps the steps one participant may mark and the steps a room counts", async () => {

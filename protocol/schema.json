@@ -840,7 +840,7 @@
     },
     "declared": {
      "type": "boolean",
-     "description": "true if the teacher set the activities; false if they are inferred from what was received (polls then have no choices)"
+     "description": "true if the teacher set the activities; false if they list the questions and polls received (polls then have no choices; never a confused)"
     }
    },
    "required": [
