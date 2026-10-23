@@ -494,3 +494,96 @@ describe("the host groups questions and replies", () => {
     back.close(); t.close();
   });
 });
+
+describe("activities absent, declared empty ({}) and declared (live §3)", () => {
+  const vote = (extra = {}) => ({ v: 1, t: "vote", activity: "p1", step: "s1:2", choice: 0, ...extra });
+  const results = async (r) => (await SELF.fetch(`${ORIGIN}/api/rooms/${r.room}/results`, { headers: { authorization: "Bearer " + r.adminKey } })).json();
+  const stillOpen = async (c) => { c.send({ v: 1, t: "ping" }); await c.next("pong"); expect(c.closed).toBeNull(); };
+
+  it("absent (no activities in the create request, none stored): qa and poll are accepted, confused is not", async () => {
+    const r = await createRoom();
+    expect(await runInDurableObject(roomStub(r.room), (inst) => inst.meta.activities)).toBeNull();
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("q", { ref: "a1" })); await c.next("ack");
+    c.send(vote({ ref: "v1" })); await c.next("ack");
+    c.send(confused("*", { activity: "confused", ref: "c1" }));
+    expect(await c.next("error")).toMatchObject({ code: "unknown_activity", ref: "c1" });
+    await refill(r.room);
+    await stillOpen(c);
+    c.send({ v: 1, t: "activities" });
+    expect((await c.next("activities")).declared).toBe(false);
+    expect((await results(r)).responses.map((x) => x.kind).sort()).toEqual(["poll", "qa"]);
+    c.close();
+  });
+
+  it("absent in stored meta (the member missing, as an older room may have it) behaves as absent", async () => {
+    const r = await createRoom();
+    await runInDurableObject(roomStub(r.room), async (inst) => { delete inst.meta.activities; await inst.saveMeta(); });
+    await evictDurableObject(roomStub(r.room));
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("q", { ref: "a1" })); await c.next("ack");
+    c.send(confused("*", { activity: "confused" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    c.close();
+  });
+
+  it("{} in the create request is stored as declared and accepts nothing; the socket stays open", async () => {
+    const r = await createRoom({ activities: {} });
+    await evictDurableObject(roomStub(r.room));
+    expect(await runInDurableObject(roomStub(r.room), (inst) => inst.meta.activities)).toEqual({});
+    const t = await joinTeacher(r);
+    expect(t.state.activities).toEqual({});
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("q", { ref: "a1" }));
+    expect(await c.next("error")).toMatchObject({ code: "unknown_activity", ref: "a1" });
+    c.send(vote({ ref: "v1" }));
+    expect(await c.next("error")).toMatchObject({ code: "unknown_activity", ref: "v1" });
+    c.send(confused("*", { activity: "confused", ref: "c1" }));
+    expect(await c.next("error")).toMatchObject({ code: "unknown_activity", ref: "c1" });
+    await refill(r.room);
+    await stillOpen(c);
+    c.send({ v: 1, t: "activities" });
+    expect(await c.next("activities")).toMatchObject({ declared: true, activities: {} });
+    const j = await results(r);
+    ok(j, "results");
+    expect(j.activities).toEqual({});
+    expect(j.responses).toEqual([]);
+    c.close(); t.close();
+  });
+
+  it("{} set by the teacher on a room without activities makes it declared: it then accepts nothing", async () => {
+    const r = await createRoom();
+    const t = await joinTeacher(r);
+    t.send({ v: 1, t: "activities", ref: "x1", activities: {} });
+    await t.next("ack");
+    expect(await runInDurableObject(roomStub(r.room), (inst) => inst.meta.activities)).toEqual({});
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("q", { ref: "a1" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    await stillOpen(c);
+    c.close(); t.close();
+  });
+
+  it("declared: only what is declared is accepted", async () => {
+    const r = await createRoom({ activities: { "*": [{ id: "qa", kind: "qa" }], "s1:2": [{ id: "p1", kind: "poll", prompt: "Q?", choices: ["a", "b"] }] } });
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send(ask("q", { ref: "a1" })); await c.next("ack");
+    c.send(vote({ ref: "v1" })); await c.next("ack");
+    c.send(confused("*", { activity: "confused", ref: "c1" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    c.send(vote({ activity: "p2", ref: "v2" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    await refill(r.room);
+    c.send(ask("q", { activity: "qa2", ref: "a2" }));
+    expect((await c.next("error")).code).toBe("unknown_activity");
+    await stillOpen(c);
+    const j = await results(r);
+    expect(j.responses.map((x) => [x.kind, x.activity]).sort()).toEqual([["poll", "p1"], ["qa", "qa"]]);
+    c.close();
+  });
+});

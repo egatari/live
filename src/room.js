@@ -142,11 +142,19 @@ export class Room extends DurableObject {
     return null;
   }
 
+  /**
+   * True if the teacher declared the activities, `{}` included (which accepts nothing). False only when they are
+   * absent (null, or not stored at all): a room created before its activities were given to it (live §3, transitional).
+   */
+  declared() { const a = this.meta?.activities; return a !== null && a !== undefined; }
+  /** The declared activities, or for a room without them the questions and polls received. */
+  listedActivities() { return this.declared() ? this.meta.activities : this.inferredActivities(); }
+
   async stateMessage() {
     const m = this.meta;
     return {
       t: "state", room: m.room, key: m.key, window: m.window, graceHours: m.graceHours, expiresAt: this.expiresAt(),
-      open: m.open, requireApproval: m.requireApproval, activities: m.activities || this.inferredActivities(),
+      open: m.open, requireApproval: m.requireApproval, activities: this.listedActivities(),
       people: await this.people(), items: await this.items(), tallies: await this.getTallies(), confused: await this.getConfused(),
     };
   }
@@ -154,7 +162,7 @@ export class Room extends DurableObject {
   /** The learner-side view of the activities (the join page asks for it; the lesson file already has it). */
   activitiesMessage() {
     const m = this.meta;
-    return { t: "activities", activities: m.activities || this.inferredActivities(), declared: !!m.activities };
+    return { t: "activities", activities: this.listedActivities(), declared: this.declared() };
   }
 
   /**
@@ -255,7 +263,7 @@ export class Room extends DurableObject {
     // Only responses to the activities listed (live §3: nothing the teacher did not declare). This leaves out
     // "I don't follow" marks in a room that declared none (accepted before this change) and responses to an
     // activity the teacher has since removed by setting new activities (kept in storage; setting it again brings them back).
-    const activities = this.meta.activities || this.inferredActivities();
+    const activities = this.listedActivities();
     const kinds = new Map();
     for (const list of Object.values(activities)) for (const a of list) kinds.set(a.id, a.kind);
     const listed = responses.filter((r) => kinds.get(r.activity) === r.kind);
@@ -380,7 +388,7 @@ export class Room extends DurableObject {
 
     const kind = m.t === "ask" ? "qa" : m.t === "confused" ? "confused" : "poll";
     const known = this.findActivity(m.activity);
-    if (this.meta.activities) {
+    if (this.declared()) {
       if (!known) return fail(ERR.UNKNOWN_ACTIVITY);
       if (known.kind !== kind) return fail(ERR.WRONG_KIND);
       if (known.step !== "*" && known.step !== m.step) return fail(ERR.UNKNOWN_ACTIVITY);
