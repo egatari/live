@@ -13,7 +13,7 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # floors: the 2026-10-20/21 Node security release (README.md, Dependencies and supply chain); a bare 22 or 24 takes the runner's cached copy, which can be older
