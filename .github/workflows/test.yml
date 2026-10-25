@@ -16,9 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          # floors: the 2026-10-20/21 Node security release (README.md, Dependencies and supply chain); a bare 22 or 24 takes the runner's cached copy, which can be older
+          node-version: ${{ matrix.node == 22 && '>=22.23.4 <23' || '>=24.22.1 <25' }}
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # no install scripts: esbuild's and workerd's postinstall are not needed (README.md, Dependencies and supply chain)
       - run: npm test
         env:
           WRANGLER_SEND_METRICS: "false"
