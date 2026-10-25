@@ -57,12 +57,19 @@ For tests and offline development the server answers Cloudflare's documented Tur
 ## Development
 
 ```sh
-npm ci
-npm test          # vitest + @cloudflare/vitest-pool-workers, fully local (Miniflare/workerd)
+npm ci --ignore-scripts
+npm test          # vitest + @cloudflare/vitest-plugin, fully local (Miniflare/workerd)
 npm run dev       # wrangler dev on http://localhost:8787
 ```
 
 Dependencies are pinned to exact versions. The tests cover creation and joining, a wrong key, key replacement, approval, close and reopen, the expiry alarm, the rate limits (messages and room creation), oversize messages, `Origin: null`, teacher endpoints without the teacher key, the results shape, hibernation, Turnstile (missing, failed and passed tokens; the siteverify call with an injected fetch), the v1 caps, the pages' CSPs, the join page (its headers and files, the join link on the teacher page before and after rekey, its retry table, and its client core driven against a live room: join, ask→ack, vote→ack, waiting→admitted, 4440 stops, 4423 retries, and that the only URL carrying the key is the WebSocket), and that every fixture in `protocol/` validates against the schema. No test touches the network.
+
+### Dependencies and supply chain
+
+- **Node floor:** 22.23.4, 24.22.1 or 26.12.1 or later on the same line (the 2026-10-20/21 Node security release); Node 20, 23 and 25 are end-of-life. `engines` in `package.json` says so (npm warns, it does not refuse). CI asks `actions/setup-node` for `'>=22.23.4 <23'` and `'>=24.22.1 <25'`, not a bare `22` / `24`: those took the runner's cached 22.23.3 and 24.21.0 (2026-10-23).
+- **Dependabot cooldown:** `.github/dependabot.yml` proposes a new npm release only after it has been public for 7 days (14 for a major version), and a new action release after 7 days. Security updates are not delayed.
+- **No install scripts:** CI installs with `npm ci --ignore-scripts`; use the same locally. The packages with an install script are `esbuild` and `workerd` (both `postinstall: node install.js`, in two copies each, under `wrangler` and `@cloudflare/vitest-plugin`) and `fsevents` (optional, macOS only). None is needed: esbuild and workerd find their binary in the platform package (`@esbuild/<os>-<arch>`, `@cloudflare/workerd-<os>-<arch>`, optional dependencies) at run time, and the scripts only check it or copy it to start faster. The tests and `wrangler dev` run this way. If a future version needs one, add `npm rebuild <package>` for that package alone after `npm ci --ignore-scripts`. Check the list after each update: `npm query ':attr(scripts, [install]), :attr(scripts, [preinstall]), :attr(scripts, [postinstall])'`.
+- **Overrides:** `undici` 7.30.1 and `zod` 4.6.7 are forced in `package.json` `overrides`, because `@cloudflare/vitest-plugin` and `miniflare` pin versions with advisories (undici up to 7.30.0, zod below 4.6.6). Remove each override once the pinned versions move past them (`npm ls undici zod`). All of this is dev-only: the Worker has no runtime dependencies.
 
 ## Deploy (for the maintainer; not done yet)
 
@@ -73,7 +80,7 @@ Deploying is done by hand after the end-to-end tests with Studio pass.
    - Put the site key in `wrangler.toml`: `TURNSTILE_SITEKEY = "<site key>"` (it is public).
    - Store the secret as a Worker secret (it is never written to the repo): `npx wrangler secret put TURNSTILE_SECRET` and paste the secret key.
 3. Production settings live in `wrangler.production.toml` (a copy of `wrangler.toml` with the `live.egatari.org` route as a Custom Domain, `PUBLIC_ORIGIN` and the Turnstile site key; `wrangler.toml` stays the development and test config). The zone `egatari.org` must be in the same Cloudflare account. With `custom_domain = true`, `wrangler deploy` creates the DNS record and the certificate itself; no manual DNS entry is needed. The account id is passed at deploy time, not committed.
-4. `npm ci && npm test && CLOUDFLARE_ACCOUNT_ID=<account id> npx wrangler deploy -c wrangler.production.toml` (Workers paid plan; Durable Objects use the SQLite backend via the `v1` migration).
+4. `npm ci --ignore-scripts && npm test && CLOUDFLARE_ACCOUNT_ID=<account id> npx wrangler deploy -c wrangler.production.toml` (Workers paid plan; Durable Objects use the SQLite backend via the `v1` migration).
 5. Check:
 
    ```sh
