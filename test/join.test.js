@@ -3,7 +3,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import {
-  JoinClient, joinUrl, parseFragment, socketUrl, plan, closeInfo, viewOf, stepText, shareText, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
+  JoinClient, joinUrl, parseFragment, socketUrl, joinMessage, plan, closeInfo, viewOf, stepText, shareText, makeStore, BACKOFF, MAX_BLIND_ATTEMPTS,
 } from "../public/join-core.js";
 import { ORIGIN, createRoom, joinTeacher, validate } from "./helpers.js";
 
@@ -146,10 +146,14 @@ describe("join page: links", () => {
     expect(parseFragment("")).toBeNull();
   });
 
-  it("the socket URL is the protocol's learner URL on the page's origin", () => {
-    expect(socketUrl("https://live.egatari.org", ROOM, KEY, "p".repeat(22))).toBe(`wss://live.egatari.org/ws?room=${ROOM}&key=${KEY}&pid=${"p".repeat(22)}`);
-    expect(socketUrl("http://localhost:8787", ROOM, KEY, "p".repeat(22))).toBe(`ws://localhost:8787/ws?room=${ROOM}&key=${KEY}&pid=${"p".repeat(22)}`);
-    expect(socketUrl("https://live.egatari.org", ROOM, KEY, "short")).toBeNull();
+  it("the socket URL is the protocol's learner URL on the page's origin, with the room only; key and pid go in the join message", () => {
+    expect(socketUrl("https://live.egatari.org", ROOM)).toBe(`wss://live.egatari.org/ws?room=${ROOM}`);
+    expect(socketUrl("http://localhost:8787", ROOM)).toBe(`ws://localhost:8787/ws?room=${ROOM}`);
+    expect(socketUrl("https://live.egatari.org", "R-BAD")).toBeNull();
+    expect(joinMessage(KEY, "p".repeat(22))).toEqual({ v: 1, t: "join", key: KEY, pid: "p".repeat(22) });
+    expect(validate(joinMessage(KEY, "p".repeat(22)), "learnerToServer")).toEqual([]);
+    expect(joinMessage(KEY, "short")).toBeNull();
+    expect(joinMessage("short", "p".repeat(22))).toBeNull();
   });
 
   it("the teacher page shows a join link built from the room and the current key, and warns after rekey", async () => {
@@ -258,8 +262,12 @@ describe("join page: client core", () => {
     expect(u.protocol).toBe("wss:");
     expect(u.host).toBe("live.test");
     expect(u.pathname).toBe("/ws");
-    expect([...u.searchParams.keys()]).toEqual(["room", "key", "pid"]);
+    expect([...u.searchParams.keys()]).toEqual(["room"]);   // the key and pid are never in a URL
+    expect(socks[0].url).not.toContain(KEY);
     expect(events[events.length - 1].s.state).toBe("connecting");
+    // the first message after the socket opens is the join, with the key and this device's pid
+    socks[0].open();
+    expect(socks[0].sent[0]).toEqual({ v: 1, t: "join", key: KEY, pid: client.pid() });
   });
 
   it("keeps one random pid per room, in localStorage or in memory when storage throws", () => {
@@ -354,7 +362,7 @@ describe("join page: against a live room", () => {
     setInterval: (f, ms) => setInterval(f, ms), clearInterval: (id) => clearInterval(id),
   });
 
-  it("join → activities → ask → ack, vote → ack, shown questions; only the WebSocket URL carries the key", async () => {
+  it("join → activities → ask → ack, vote → ack, shown questions; no URL carries the key", async () => {
     const r = await createRoom({ activities });
     const t = await joinTeacher(r);
     const urls = [];
@@ -387,13 +395,16 @@ describe("join page: against a live room", () => {
 
     // the page sent only what the protocol allows learners to send
     const sock = client.ws;
-    expect([...new Set(sock.sent.map((m) => m.t))].sort()).toEqual(["activities", "ask", "vote"]);
+    expect([...new Set(sock.sent.map((m) => m.t))].sort()).toEqual(["activities", "ask", "join", "vote"]);
+    expect(sock.sent[0]).toEqual({ v: 1, t: "join", key: r.key, pid: client.pid() });
     for (const m of sock.sent) expect(validate(m, "learnerToServer"), JSON.stringify(m)).toEqual([]);
     // exactly one URL was ever requested, and it is the learner WebSocket
     expect(urls).toHaveLength(1);
     const u = new URL(urls[0]);
     expect(`${u.protocol}//${u.host}${u.pathname}`).toBe("wss://live.test/ws");
-    expect(u.searchParams.get("key")).toBe(r.key);
+    expect([...u.searchParams.keys()]).toEqual(["room"]);
+    expect(urls[0]).not.toContain(r.key);
+    expect(urls[0]).not.toContain(client.pid());
     client.leave();
     t.close();
   });

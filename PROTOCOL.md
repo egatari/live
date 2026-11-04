@@ -87,9 +87,12 @@ key  = base64url( SHA-256( UTF-8("egatari-live/v1/key:" + setup) )[0..16] )     
 ## 3. Learner WebSocket
 
 ```
-wss://live.egatari.org/ws?room=<room>&key=<key>&pid=<pid>
+wss://live.egatari.org/ws?room=<room>
+{"v":1,"t":"join","key":"<key>","pid":"<pid>"}
 ```
 
+- The URL carries only the room. The learner key and the pid travel in the **first message**, `join`, so that they never appear in a request line, a proxy log or a server log. The server accepts no other message before `join` (anything else: 4400; a wrong or malformed key or pid: 4403) and closes a socket that has not sent `join` within 10 s with 4403. The ping auto-response (below) answers an exact `{"v":1,"t":"ping"}` at any time without reaching the room. At most 60 sockets per room may be waiting for their `join` (4430 beyond).
+- **Transition.** Until the date given in README "Deploy", the server also accepts the earlier form `/ws?room=<room>&key=<key>&pid=<pid>`, without a `join` message, so that lesson files exported before this change keep working. New players and the join page never use it.
 - Any `Origin` is accepted, including `null` (lessons opened from `file://`), because the key is the capability.
 - The server always completes the upgrade and reports refusals as close codes (§5), because browsers do not expose HTTP status codes of a failed WebSocket handshake.
 - Only one connection per `pid`: a newer one closes the older with 4409.
@@ -114,6 +117,7 @@ Projected questions carry `id`, `activity`, `step`, `text` and, if the host repl
 
 | `t` | Members | Notes |
 |---|---|---|
+| `join` | `key`, `pid` | the first message, and only then (§3). Reply `welcome`, or a close code |
 | `ask` | `activity`, `step`, `text` (1–500 characters), `strokes?`, `sourceSha256?` | a question for a `qa` activity. `step` is the step key under which the activity is declared, or, for an activity declared under `*`, the step key on screen when the learner pressed Send (the player MAY send `*`; the step key already names the slide, `slideKey:stepKey`). `strokes` (optional): a region the learner circled on that step, in stage coordinates (1280 × 720), the shape of Egatari Studio's review notes: `[[[x, y], …], …]`, 1–20 strokes of 2–500 points, 2000 points in all, each coordinate rounded to 0.1, no two consecutive points equal (players normalise before sending; the server refuses anything else with `bad_region` and keeps the connection; never with step `*`). `sourceSha256` (optional): the lesson's source hash, so that the question can be mapped onto that version of the lesson. An `ask` frame may be up to 40960 bytes; every other learner message stays within 2048. |
 | `confused` | `activity`, `step`, `on?` (default `true`) | "I don't follow" for a `confused` activity, without text: `on: true` marks the step, `on: false` takes the mark back. One mark per participant and step (a repeated tap changes nothing). `step` as for `ask`: the step on screen for an activity under `*` (the join page, which has no step, sends `*`). |
 | `vote` | `activity`, `step`, `choice` (0-based index) | a single-choice poll; a new vote replaces the previous one |
@@ -194,9 +198,9 @@ The first message must be `{"v":1,"t":"auth","adminKey":"…"}` within 10 s; oth
 
 | Code | Name | Meaning | Retry |
 |---|---|---|---|
-| 4400 | `bad_message` | protocol violation (malformed, oversize, unknown type, wrong version) | no |
-| 4401 | `unauthorized` | teacher socket without a valid admin key | no |
-| 4403 | `bad_key` | wrong learner key (or malformed pid) | no |
+| 4400 | `bad_message` | protocol violation (malformed, oversize, unknown type, wrong version; on a learner socket, any first message other than `join`) | no |
+| 4401 | `unauthorized` | teacher socket without a valid admin key, or no `auth` within 10 s | no |
+| 4403 | `bad_key` | wrong learner key (or malformed pid), or no `join` within 10 s | no |
 | 4404 | `room_not_found` | no such room (never created, or deleted) | no |
 | 4409 | `superseded` | the same pid connected again elsewhere | no |
 | 4410 | `room_expired` | the window is over / the room was deleted | no |
@@ -254,7 +258,7 @@ Some devices cannot connect from the distributed file: a lesson opened inside a 
 https://live.egatari.org/join#room=<room>&key=<key>
 ```
 
-- The room and the learner key are **only in the fragment**, which browsers never send, so they reach neither the server's request line nor any log. The page reads them with `location.hash`. Its own requests are `/join`, `/join.js`, `/join-core.js` and `/join.css`, with no query; the only URL that carries the key is the learner WebSocket `/ws?room=&key=&pid=` (§3), which already carries it.
+- The room and the learner key are **only in the fragment**, which browsers never send, so they reach neither the server's request line nor any log. The page reads them with `location.hash`. Its own requests are `/join`, `/join.js`, `/join-core.js` and `/join.css`, with no query; no URL carries the key: the learner WebSocket is `/ws?room=` and the key goes in its first message, `join` (§3).
 - The link is built from the room and the **current** learner key. After `rekey` the teacher page updates it and warns that links shared before stop working (the page then stops with 4440).
 - Same data rules as a player (format spec live §2.3): it sends only `ask`, `vote`, `confused` (the learner's own tap), `name` (only if typed), `activities` and `ping`. The `pid` is random (16 bytes, base64url), kept in `localStorage` per room (key `egatari-live-pid:<room>`), in memory if storage is blocked. No telemetry; no third parties; every server string is shown with `textContent`. Same CSP as `/room` (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' wss://<host>; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`), with `referrer-policy: no-referrer`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No Turnstile.
 - Before connecting it shows the notice 「この教材は live.egatari.org の授業の部屋につながります」 / "This lesson connects to a live room at live.egatari.org" and a **参加する / Join** button; it connects only after the tap (remembered for the tab in `sessionStorage`, so a reload reconnects). While joined, a persistent indicator with **Disconnect**; while waiting for approval, a waiting notice (and the name field, so the teacher can recognise the learner).
@@ -271,7 +275,7 @@ Egatari Live は、配った教材（再生専用のファイル）から、そ�
 - **HTTP**：`POST /api/rooms` で部屋を作る（教員のページから。Cloudflare Turnstile のトークンが要る。送り手ごとに 1 分 5 部屋まで。時間の窓は 3 時間まで（`window_too_long`）、人数の見込みは 60 人まで（`room_too_large`））。返るのは部屋の `room`、参加の鍵 `key`（書き出すファイルに入る）、教員の鍵 `adminKey`（一度だけ表示、ページのアドレスの `#` の後ろにだけ置き、ファイルには入れない。なくしたら作り直す）。結果は `GET /api/rooms/{room}/results` に `Authorization: Bearer <adminKey>` を付けて JSON（`{room, window, activities, responses}`）で受け取る。
 - **エディタからの一方向の設定**（§2.1）：エディタ（Egatari Studio）は通信しない。エディタが 32 バイトの乱数 `setup` を作り、そこから `room` と `key` を SHA-256 で導き、`egatari-live-setup-v1:` で始まる 1 本の文字列（`{v, endpoint, room, key, setup, window, activities}` の JSON を base64url にしたもの）をホストに渡す。ホストはそれを部屋を作るページに 1 回だけ貼り、Turnstile の確認を通す。サービスは `room` と `key` が `setup` から導いたものと一致するとき（比べるのは一定時間）だけ、その `room`・`key`・活動のとおりに部屋を作る。同じ id の部屋があれば `409 room_exists` で断り、既にある部屋は変えない。教材ファイル（`room` と `key` だけ入っていて `setup` はない）を持っているだけでは部屋を作れない。前からのやり方（サービスが id を選び、ホストが設定を Studio に貼り戻す）も残る。
 - **参加用のページ**：教材のファイルからつながらない端末（スマートフォンのチャットのアプリの中のブラウザ、ファイルを見るだけのアプリなど）のために、`/join#room=…&key=…` のリンクを教員のページに出す。部屋と鍵は `#` の後ろにだけあり、サーバーには送られない。送るもの・決まり・つなぎ直し方は再生アプリと同じ。投票は、部屋にあるものをすべて、段階の表示（活動の `label`。なければ段階の鍵。`*` は「教材全体」）と一緒に出す（このページには今の段階がなく、通信の約束にも「いま開いている投票」がないため）。部屋の活動は、新しい `activities` の問い合わせで受け取る（§7.1）。
-- **学ぶ人の WebSocket**：`/ws?room=&key=&pid=`。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
+- **学ぶ人の WebSocket**：`/ws?room=`。参加の鍵と端末の id は、つないだ後の最初のメッセージ `join` で送る（アドレスに入れないので、プロキシやサーバーの記録に残らない）。10 秒以内に `join` が来なければ 4403 で切る。`join` より前のほかのメッセージは受け付けない（4400）。移行の間は、前の形 `/ws?room=&key=&pid=` も受け付ける（README「Deploy」の日付まで）。`file://` から開いた教材（Origin が `null`）も受け付ける。送るのは活動の id・段階の鍵・質問の文または投票の選択・端末で作った乱数の id・（入力したときだけ）名前だけ。視聴の位置や時間などの記録は送らない。最初の接続の前に「参加する」を 1 回押してもらう。
 - **活動の表示名**：活動（`qa`・`poll`）は任意で `label`（80 字まで。例「4 枚目『XML の壁』・段階 1」）を持てる。編集アプリが活動を作るときに書く表示のための字で、鍵や段階の鍵はそのまま。教員のページと参加用のページは、段階の鍵の代わりにこれを出し（鍵は title の吹き出し）、結果の JSON の `activities` にも残る。`label` のない古い活動は段階の鍵（「s-xxx · 段階 1」）で出す。
 - **教員の WebSocket**：`/ws/teacher?room=`。最初のメッセージで `adminKey` を送る。部屋を開ける・閉じる、承認（待合）、参加の鍵の取り替え（古い鍵の人は切断）、質問の「読んだ・答えた・映す・隠す」、投票の集計。
 - **質問とわからない**：質問（`ask`）には、送ったときに画面にあったステップ（`slideKey:stepKey`）と、任意で囲んだところ（`strokes`。舞台の座標、Studio の手書きメモと同じ形で 20 本・1 本 500 点・合わせて 2000 点まで）と、教材の版（`sourceSha256`）が付く。質問はホストだけが見る。ホストは似た質問をまとめ（`group`・`ungroup`）、短い返事（`reply`。200 字まで）を送れる。返事は質問した人にだけ届き（まとめた質問なら質問した人みんなに）、ホストが選べば質問と一緒に全員に出る（`public`）。「わからない」（活動の種類 `confused`）は文のない一押しで、1 人 1 ステップに 1 回、取り消せる。ホストにはステップごとの人数だけが届き、参加者には何も届かない。

@@ -62,7 +62,7 @@ npm test          # vitest + @cloudflare/vitest-plugin, fully local (Miniflare/w
 npm run dev       # wrangler dev on http://localhost:8787
 ```
 
-Dependencies are pinned to exact versions. The tests cover creation and joining, a wrong key, key replacement, approval, close and reopen, the expiry alarm, the rate limits (messages and room creation), oversize messages, `Origin: null`, teacher endpoints without the teacher key, the results shape, hibernation, Turnstile (missing, failed and passed tokens; the siteverify call with an injected fetch), the v1 caps, the pages' CSPs, the join page (its headers and files, the join link on the teacher page before and after rekey, its retry table, and its client core driven against a live room: join, ask→ack, vote→ack, waiting→admitted, 4440 stops, 4423 retries, and that the only URL carrying the key is the WebSocket), and that every fixture in `protocol/` validates against the schema. No test touches the network.
+Dependencies are pinned to exact versions. The tests cover creation and joining, a wrong key, key replacement, approval, close and reopen, the expiry alarm, the rate limits (messages and room creation), oversize messages, `Origin: null`, teacher endpoints without the teacher key, the results shape, hibernation, Turnstile (missing, failed and passed tokens; the siteverify call with an injected fetch), the v1 caps, the pages' CSPs, the join page (its headers and files, the join link on the teacher page before and after rekey, its retry table, and its client core driven against a live room: join, ask→ack, vote→ack, waiting→admitted, 4440 stops, 4423 retries, and that no URL carries the key or the pid), the learner `join` message (nothing accepted before it, 4403 after 10 s without it, the cap on sockets that have not joined, the transition form), and that every fixture in `protocol/` validates against the schema. No test touches the network.
 
 ### Dependencies and supply chain
 
@@ -99,6 +99,14 @@ Deploying is done by hand after the end-to-end tests with Studio pass.
    Then create one room from the page in a browser to see the widget pass.
 
 6. Recommended extra layer: a Cloudflare rate-limiting rule on `POST /api/rooms` (e.g. 10 per minute per IP), and a usage alert on the account, since room creation needs no account.
+
+### Changing the learner socket: key and pid in the first message (2026-11)
+
+Learners used to put the key and the pid in the socket URL (`/ws?room=&key=&pid=`), where proxies and server logs could keep them. They now send them in the first message, `join` (PROTOCOL.md §3). Lesson files already handed out carry the old player and cannot be updated, and a room may start up to 180 days after it was created, so the server accepts both forms for a while:
+
+1. **Deploy this server first.** It accepts the new form and, for the transition, the old one (`Room.joinByQuery`). Nothing changes for players already out there.
+2. **Then release Egatari Studio v0.6.6** (its player and the Egatari Viewer send `join`). Files exported from it never put the key in a URL.
+3. **Remove the old form** (`joinByQuery`, the `key`/`pid` branch in `Room.fetch`, the transition note in PROTOCOL.md §3 and its test) **no earlier than 181 days after the Studio release in step 2**: by then every room that a file exported before it could join has ended. Removal date: _fill in when v0.6.6 is released_. An editor saved before v0.6.6 (`editor.html` kept offline) still exports the old player until it is updated; after the removal such a file gets 4403.
 
 To opt out of Wrangler's own usage metrics on the maintainer's machine: `npx wrangler telemetry disable`.
 
@@ -146,6 +154,8 @@ Cloudflare Workers の上で、1 部屋に 1 つの Durable Object を使い、W
 ### 開発とデプロイ
 
 `npm ci` のあと `npm test` で、手元だけで試験が通ります（Miniflare / workerd）。デプロイは Studio との通しの試験が通った後に手で行います（上の英語の「Deploy」の手順）。Cloudflare のダッシュボードで Turnstile のウィジェットを作り（ホスト名 live.egatari.org、試すなら localhost も）、秘密の鍵は `npx wrangler secret put TURNSTILE_SECRET` で入れます（会話のできるターミナルで）。本番の設定は `wrangler.production.toml`（`routes` の custom domain・`PUBLIC_ORIGIN`・サイトキー入り。`wrangler.toml` は開発と試験用のまま）で、`CLOUDFLARE_ACCOUNT_ID=<アカウントの ID> npx wrangler deploy -c wrangler.production.toml` とすると、DNS の記録と証明書は自動で作られます。アカウントの ID はリポジトリに入れません。
+
+**学ぶ人の接続の変更（2026-11）。** 参加コードと端末の id を、接続のアドレス（`/ws?room=&key=&pid=`）でなく、つないだ後の最初のメッセージ `join` で送るようにしました（プロキシやサーバーの記録に残らないように。PROTOCOL.md §3）。配った教材のファイルは古い再生器のままなので、しばらくは両方の形を受け付けます。順番は、(1) このサーバーを先にデプロイする、(2) その後で Egatari Studio v0.6.6 を出す、(3) 前の形（`Room.joinByQuery`）を消すのは、(2) から 181 日より後（部屋は作ってから 180 日先まで始められるため）。くわしくは英語の「Deploy」の節。
 
 ### ライセンス
 

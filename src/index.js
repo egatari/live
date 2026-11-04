@@ -128,7 +128,9 @@ export default {
     const origin = env.PUBLIC_ORIGIN || url.origin;
     const path = url.pathname;
 
-    // Learner socket. Any Origin is accepted (including "null" from file://): the key is the capability.
+    // Learner socket: /ws?room=<room>, then the first message is {v:1, t:"join", key, pid} (PROTOCOL.md §3), so that the key
+    // and pid never appear in a URL (proxy and server logs). Any Origin is accepted (including "null" from file://): the key
+    // is the capability. The query form ?room=&key=&pid= is still accepted during the transition (Room.joinByQuery).
     if (path === "/ws") {
       if (request.headers.get("upgrade") !== "websocket") return fail(426, ERR.BAD_REQUEST, "WebSocket upgrade required");
       const room = url.searchParams.get("room") || "";

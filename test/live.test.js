@@ -7,7 +7,7 @@ import closeCodes from "../protocol/close-codes.json";
 import worker from "../src/index.js";
 import { verifyTurnstile, SITEVERIFY_URL } from "../src/turnstile.js";
 import {
-  ORIGIN, DUMMY_TOKEN, createRequest, validate, createRoom, joinLearner, joinTeacher, openSocket, learnerPath, newPid, windowAround,
+  ORIGIN, DUMMY_TOKEN, createRequest, validate, createRoom, joinLearner, joinLearnerByQuery, joinTeacher, openSocket, learnerPath, legacyLearnerPath, newPid, windowAround,
 } from "./helpers.js";
 
 const fixtures = import.meta.glob("../protocol/fixtures/**/*.json", { eager: true, import: "default" });
@@ -116,10 +116,16 @@ describe("rooms", () => {
 
   it("rejects a wrong key", async () => {
     const r = await createRoom();
-    const c = await openSocket(learnerPath(r.room, "A".repeat(22), newPid()), { origin: "null" });
+    const c = await joinLearner({ ...r, key: "A".repeat(22) });
     expect(await c.closedWith()).toBe(CLOSE.BAD_KEY);
-    const d = await openSocket(learnerPath("r-aaaaaaaa", r.key, newPid()), { origin: "null" });
+    const d = await joinLearner({ ...r, room: "r-aaaaaaaa" });
     expect(await d.closedWith()).toBe(CLOSE.ROOM_NOT_FOUND);
+    // a malformed key or pid in the join message is a wrong key too
+    for (const join of [{ key: "short", pid: newPid() }, { key: r.key, pid: "x" }, { key: 1, pid: newPid() }]) {
+      const e = await openSocket(learnerPath(r.room), { origin: "null" });
+      e.send({ v: 1, t: "join", ...join });
+      expect(await e.closedWith(), JSON.stringify(join)).toBe(CLOSE.BAD_KEY);
+    }
   });
 
   it("accepts learners from file:// pages (Origin null) and from any origin", async () => {
@@ -208,6 +214,89 @@ describe("room creation abuse controls", () => {
     ok(j, "httpError");
     // another sender is not affected
     expect((await post(createRequest({}, { "cf-connecting-ip": "192.0.2.78" })))[0]).toBe(201);
+  });
+});
+
+describe("learner join message (key and pid not in the URL)", () => {
+  it("the socket URL has only the room; welcome follows the join message", async () => {
+    const r = await createRoom();
+    expect(learnerPath(r.room)).toBe(`/ws?room=${r.room}`);
+    const c = await openSocket(learnerPath(r.room), { origin: "null" });
+    const pid = newPid();
+    await new Promise((res) => setTimeout(res, 50));
+    expect(c.msgs).toEqual([]);   // nothing before the join
+    c.send({ ...fixtures["../protocol/fixtures/learner/join.json"], key: r.key, pid });
+    const w = await c.next("welcome");
+    ok(w, "serverToLearner");
+    expect(w.pid).toBe(pid);
+    c.close();
+  });
+
+  it("accepts no other message before the join, and no join after it", async () => {
+    const r = await createRoom();
+    const t = await joinTeacher(r);
+    for (const first of [{ v: 1, t: "ask", activity: "qa", step: "s1:1", text: "early" }, { v: 1, t: "name", name: "x" },
+      { v: 1, t: "activities" }, { v: 1, t: "join", key: r.key, pid: newPid(), extra: 1 }, "not json", { v: 2, t: "join", key: r.key, pid: newPid() }]) {
+      const c = await openSocket(learnerPath(r.room), { origin: "null" });
+      c.send(first);
+      expect(await c.closedWith(), JSON.stringify(first)).toBe(CLOSE.BAD_MESSAGE);
+      expect(c.msgs).toEqual([]);
+    }
+    expect(t.msgs.filter((m) => m.t === "item")).toEqual([]);
+    const c = await joinLearner(r);
+    await c.next("welcome");
+    c.send({ v: 1, t: "join", key: r.key, pid: c.pid });
+    expect((await c.next("error")).code).toBe("unknown_type");
+    expect(await c.closedWith()).toBe(CLOSE.BAD_MESSAGE);
+    t.close();
+  });
+
+  it("closes a socket that does not join in time (4403), and a teacher that does not authenticate (4401)", async () => {
+    const r = await createRoom();
+    const c = await openSocket(learnerPath(r.room), { origin: "null" });
+    const s = await openSocket(`/ws/teacher?room=${r.room}`, { origin: ORIGIN });
+    const late = await openSocket(learnerPath(r.room), { origin: "null" });
+    await runInDurableObject(roomStub(r.room), async (inst, state) => {
+      for (const ws of [...state.getWebSockets("learner"), ...state.getWebSockets("teacher")]) {
+        const a = ws.deserializeAttachment(); a.openedAt -= Math.max(L.LEARNER_JOIN_TIMEOUT_MS, L.TEACHER_AUTH_TIMEOUT_MS) + 1; ws.serializeAttachment(a);
+      }
+    });
+    late.send({ v: 1, t: "join", key: r.key, pid: newPid() });   // a join after the timeout is refused too
+    expect(await late.closedWith()).toBe(CLOSE.BAD_KEY);
+    await runInDurableObject(roomStub(r.room), (inst) => inst.sweepUnauthed());
+    expect(await c.closedWith()).toBe(CLOSE.BAD_KEY);
+    expect(await s.closedWith()).toBe(CLOSE.UNAUTHORIZED);
+    // the timer is armed while a socket is unauthenticated, and stopped once all have authenticated (so the room can hibernate)
+    const p = await openSocket(learnerPath(r.room), { origin: "null" });
+    expect(await runInDurableObject(roomStub(r.room), (inst) => !!inst.sweepTimer)).toBe(true);
+    p.send({ v: 1, t: "join", key: r.key, pid: newPid() });
+    await p.next("welcome");
+    expect(await runInDurableObject(roomStub(r.room), (inst) => !!inst.sweepTimer)).toBe(false);
+    p.close();
+  });
+
+  it("limits sockets that have not joined yet", async () => {
+    const r = await createRoom();
+    const pending = [];
+    for (let i = 0; i < L.MAX_PENDING_LEARNERS; i++) pending.push(await openSocket(learnerPath(r.room), { origin: "null" }));
+    const extra = await openSocket(learnerPath(r.room), { origin: "null" });
+    expect(await extra.closedWith()).toBe(CLOSE.ROOM_FULL);
+    for (const c of pending) c.close();
+  });
+
+  it("transition: the query form of players exported before the join message still joins", async () => {
+    const r = await createRoom();
+    const c = await joinLearnerByQuery(r);
+    expect((await c.next("welcome")).status).toBe("admitted");
+    c.send(ask("old player"));
+    await c.next("ack");
+    const bad = await openSocket(legacyLearnerPath(r.room, "A".repeat(22), newPid()), { origin: "null" });
+    expect(await bad.closedWith()).toBe(CLOSE.BAD_KEY);
+    // the same pid joining with the message supersedes the old-form socket
+    const d = await joinLearner(r, c.pid);
+    await d.next("welcome");
+    expect(await c.closedWith()).toBe(CLOSE.SUPERSEDED);
+    d.close();
   });
 });
 

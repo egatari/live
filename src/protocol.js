@@ -6,7 +6,7 @@ import * as L from "./limits.js";
 export const CLOSE = Object.freeze({
   BAD_MESSAGE: 4400,       // malformed, oversize, unknown type, wrong version
   UNAUTHORIZED: 4401,      // teacher socket: missing / wrong adminKey, or auth timeout
-  BAD_KEY: 4403,           // learner: wrong key for this room
+  BAD_KEY: 4403,           // learner: wrong key for this room, malformed pid, or no join within 10 s
   ROOM_NOT_FOUND: 4404,
   SUPERSEDED: 4409,        // a newer connection with the same pid took over
   ROOM_EXPIRED: 4410,      // window over (or room deleted at the end of the grace period)
@@ -262,6 +262,18 @@ export function checkLearnerMessage(m) {
 function checkActivityRef(m) {
   if (typeof m.activity !== "string" || !RE_ACTIVITY.test(m.activity)) throw new ProtocolError(ERR.BAD_MESSAGE, "bad activity");
   if (typeof m.step !== "string" || !RE_STEP.test(m.step)) throw new ProtocolError(ERR.BAD_MESSAGE, "bad step");
+}
+
+/**
+ * Validate the learner's first message after parseFrame: exactly {v, t: "join", key, pid}. The key and pid travel in this
+ * message, not in the socket URL, so that they do not end up in proxy or server logs (PROTOCOL.md §3).
+ * A message of another type is a protocol violation (4400); a malformed key or pid is a wrong key (4403).
+ */
+export function checkJoinMessage(m) {
+  if (m.t !== "join") throw new ProtocolError(ERR.BAD_MESSAGE, "the first message must be join");
+  if (!only(m, ["v", "t", "key", "pid"])) throw new ProtocolError(ERR.BAD_MESSAGE, "unexpected member");
+  if (typeof m.key !== "string" || !RE_KEY.test(m.key) || typeof m.pid !== "string" || !RE_PID.test(m.pid)) throw new ProtocolError(ERR.UNAUTHORIZED);
+  return m;
 }
 
 /** Validate a teacher message after parseFrame. */

@@ -122,11 +122,21 @@ export async function openSocket(path, headers = {}) {
   return c;
 }
 
-export const learnerPath = (room, key, pid) =>
+// The learner socket URL carries only the room; the key and pid go in the first message (PROTOCOL.md §3).
+export const learnerPath = (room) => `/ws?room=${encodeURIComponent(room)}`;
+// The query form that players exported before the join message use; accepted during the transition only.
+export const legacyLearnerPath = (room, key, pid) =>
   `/ws?room=${encodeURIComponent(room)}&key=${encodeURIComponent(key)}&pid=${encodeURIComponent(pid)}`;
 
 export async function joinLearner(r, pid = newPid(), headers = { origin: "null" }) {
-  const c = await openSocket(learnerPath(r.room, r.key, pid), headers);
+  const c = await openSocket(learnerPath(r.room), headers);
+  c.send({ v: 1, t: "join", key: r.key, pid });
+  c.pid = pid;
+  return c;
+}
+
+export async function joinLearnerByQuery(r, pid = newPid(), headers = { origin: "null" }) {
+  const c = await openSocket(legacyLearnerPath(r.room, r.key, pid), headers);
   c.pid = pid;
   return c;
 }

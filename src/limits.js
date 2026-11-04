@@ -50,6 +50,10 @@ export const MAX_CONFUSED_STEPS_PER_PARTICIPANT = 100;   // distinct steps one p
 export const MAX_CONFUSED_STEPS = 500;                   // distinct steps counted in one room
 export const MAX_CHOICES = 12;
 export const TEACHER_AUTH_TIMEOUT_MS = 10000;
+// Learner socket (PROTOCOL.md §3): the first message must be `join` (key and pid) within this time; until then the socket
+// counts as pending and nothing else is accepted. At most MAX_PENDING_LEARNERS pending sockets per room.
+export const LEARNER_JOIN_TIMEOUT_MS = 10000;
+export const MAX_PENDING_LEARNERS = 60;
 
 // Window and lifetime
 export const CLOCK_SKEW_MS = 2 * 60 * 1000;            // leeway for learners' clocks at window edges

@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import * as L from "./limits.js";
 import {
-  CLOSE, CLOSE_REASON, ERR, ProtocolError, parseFrame, checkLearnerMessage, checkTeacherMessage,
+  CLOSE, CLOSE_REASON, ERR, ProtocolError, parseFrame, checkLearnerMessage, checkTeacherMessage, checkJoinMessage,
   newLearnerKey, newItemId, newGroupId, sha256, sameDigest, RE_PID, RE_KEY,
 } from "./protocol.js";
 
@@ -42,7 +42,12 @@ export class Room extends DurableObject {
   fromMs() { return Date.parse(this.meta.window.from); }
   expiresAt() { return new Date(this.toMs() + this.graceMs()).toISOString(); }
   // Sockets we have started to close stay listed until the close completes; count only open ones.
-  learners() { return this.ctx.getWebSockets("learner").filter((ws) => ws.readyState === WebSocket.OPEN); }
+  // Every learner socket has the tag "learner"; its attachment says whether it has joined (role "learner") or is still
+  // waiting for its `join` message (role "pending"). Tags are fixed when a socket is accepted, so the pid is in the attachment.
+  learners() { return this.openLearnerSockets().filter((ws) => ws.deserializeAttachment()?.role === "learner"); }
+  pendingLearners() { return this.openLearnerSockets().filter((ws) => ws.deserializeAttachment()?.role === "pending"); }
+  openLearnerSockets() { return this.ctx.getWebSockets("learner").filter((ws) => ws.readyState === WebSocket.OPEN); }
+  pidSockets(pid) { return this.learners().filter((ws) => ws.deserializeAttachment()?.pid === pid); }
   teachers() {
     return this.ctx.getWebSockets("teacher").filter((ws) => ws.readyState === WebSocket.OPEN && ws.deserializeAttachment()?.authed);
   }
@@ -105,8 +110,8 @@ export class Room extends DurableObject {
 
   /** Send to every admitted socket of one participant. */
   toPid(pid, msg) {
-    for (const ws of this.ctx.getWebSockets("pid:" + pid)) {
-      if (ws.readyState === WebSocket.OPEN && ws.deserializeAttachment()?.status === "admitted") this.send(ws, msg);
+    for (const ws of this.pidSockets(pid)) {
+      if (ws.deserializeAttachment()?.status === "admitted") this.send(ws, msg);
     }
   }
 
@@ -180,13 +185,34 @@ export class Room extends DurableObject {
     return out;
   }
 
-  // Close unauthenticated teacher sockets that did not authenticate in time.
-  sweepTeachers() {
+  // Close sockets that did not authenticate in time: teachers without `auth` (4401), learners without `join` (4403).
+  // Runs on every join and message, and from a timer while such sockets exist (the timer keeps the object awake for
+  // at most the timeout; if the object is evicted meanwhile, the next join or message sweeps).
+  sweepUnauthed() {
     const now = Date.now();
+    let left = false;
     for (const ws of this.ctx.getWebSockets("teacher")) {
       const a = ws.deserializeAttachment();
-      if (a && !a.authed && now - a.openedAt > L.TEACHER_AUTH_TIMEOUT_MS) this.closeWs(ws, CLOSE.UNAUTHORIZED);
+      if (!a || a.authed || ws.readyState !== WebSocket.OPEN) continue;
+      if (now - a.openedAt > L.TEACHER_AUTH_TIMEOUT_MS) this.closeWs(ws, CLOSE.UNAUTHORIZED); else left = true;
     }
+    for (const ws of this.pendingLearners()) {
+      if (now - ws.deserializeAttachment().openedAt > L.LEARNER_JOIN_TIMEOUT_MS) this.closeWs(ws, CLOSE.BAD_KEY); else left = true;
+    }
+    return left;
+  }
+  // Stop the timer once every socket has authenticated, so that the object can hibernate.
+  disarmSweep() {
+    if (!this.sweepTimer) return;
+    const unauthed = this.ctx.getWebSockets("teacher").some((ws) => ws.readyState === WebSocket.OPEN && !ws.deserializeAttachment()?.authed);
+    if (unauthed || this.pendingLearners().length) return;
+    clearTimeout(this.sweepTimer);
+    this.sweepTimer = null;
+  }
+  armSweep() {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setTimeout(() => { this.sweepTimer = null; if (this.sweepUnauthed()) this.armSweep(); },
+      Math.max(L.TEACHER_AUTH_TIMEOUT_MS, L.LEARNER_JOIN_TIMEOUT_MS) + 100);
   }
 
   // ------------------------------------------------------------------ HTTP entry (from the Worker)
@@ -194,7 +220,8 @@ export class Room extends DurableObject {
     const url = new URL(request.url);
     switch (url.pathname) {
       case "/do/create": return this.create(await request.json());
-      case "/do/learner": return this.joinLearner(url);
+      // The query form (?key=&pid=) is the transition path for players exported before the join message; see joinByQuery.
+      case "/do/learner": return url.searchParams.has("key") || url.searchParams.has("pid") ? this.joinByQuery(url) : this.acceptLearner();
       case "/do/teacher": return this.joinTeacher();
       case "/do/results": return this.results(request);
       default: return json({ v: 1, error: ERR.NOT_FOUND }, 404);
@@ -272,23 +299,67 @@ export class Room extends DurableObject {
   }
 
   // ------------------------------------------------------------------ joining
-  async joinLearner(url) {
-    const key = url.searchParams.get("key") || "", pid = url.searchParams.get("pid") || "";
-    const m = this.meta, now = Date.now();
-    if (!m) return rejectSocket(CLOSE.ROOM_NOT_FOUND);
-    if (now > this.toMs() + L.CLOCK_SKEW_MS) return rejectSocket(CLOSE.ROOM_EXPIRED);
-    if (now < this.fromMs() - L.CLOCK_SKEW_MS) return rejectSocket(CLOSE.TOO_EARLY);
-    if (!RE_KEY.test(key) || !RE_PID.test(pid) || !sameDigest(await sha256(key), await sha256(m.key))) {
-      return rejectSocket(CLOSE.BAD_KEY);
+  // A learner socket (PROTOCOL.md §3): accepted as pending; its first message must be `join` with the key and pid.
+  acceptLearner() {
+    if (!this.meta) return rejectSocket(CLOSE.ROOM_NOT_FOUND);
+    this.sweepUnauthed();
+    if (this.pendingLearners().length >= L.MAX_PENDING_LEARNERS) return rejectSocket(CLOSE.ROOM_FULL);
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server, ["learner"]);
+    server.serializeAttachment({ role: "pending", openedAt: Date.now() });
+    this.armSweep();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async onPending(ws, raw) {
+    const a = ws.deserializeAttachment();
+    // One message only: anything after the join (while the key is being checked) is a protocol violation.
+    if (a.joining) return this.closeWs(ws, CLOSE.BAD_MESSAGE);
+    a.joining = true;
+    ws.serializeAttachment(a);
+    let m;
+    try {
+      m = checkJoinMessage(parseFrame(raw, L.MAX_LEARNER_MESSAGE_BYTES));
+    } catch (e) {
+      return this.closeWs(ws, e instanceof ProtocolError && e.code === ERR.UNAUTHORIZED ? CLOSE.BAD_KEY : CLOSE.BAD_MESSAGE);
     }
-    if (!m.open) return rejectSocket(CLOSE.ROOM_CLOSED);
+    if (Date.now() - a.openedAt > L.LEARNER_JOIN_TIMEOUT_MS) return this.closeWs(ws, CLOSE.BAD_KEY);
+    const j = await this.checkLearner(m.key, m.pid);
+    if (j.code) return this.closeWs(ws, j.code);
+    if (ws.readyState !== WebSocket.OPEN) return;   // the learner left while we checked
+    await this.welcome(ws, j);
+  }
+
+  /**
+   * Transition (remove after the date in README "Deploy"): players exported before the join message put the key and pid
+   * in the socket URL. They keep working until then; new players never do this.
+   */
+  async joinByQuery(url) {
+    const j = await this.checkLearner(url.searchParams.get("key") || "", url.searchParams.get("pid") || "");
+    if (j.code) return rejectSocket(j.code);
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server, ["learner"]);
+    await this.welcome(server, j);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Check a learner's key and pid and record the participant: {code} to refuse, or {p, pid, previous}.
+  async checkLearner(key, pid) {
+    const m = this.meta, now = Date.now();
+    if (!m) return { code: CLOSE.ROOM_NOT_FOUND };
+    if (now > this.toMs() + L.CLOCK_SKEW_MS) return { code: CLOSE.ROOM_EXPIRED };
+    if (now < this.fromMs() - L.CLOCK_SKEW_MS) return { code: CLOSE.TOO_EARLY };
+    if (!RE_KEY.test(key) || !RE_PID.test(pid) || !sameDigest(await sha256(key), await sha256(m.key))) return { code: CLOSE.BAD_KEY };
+    if (!m.open) return { code: CLOSE.ROOM_CLOSED };
     let p = await this.person(pid);
-    if (p?.status === "denied") return rejectSocket(CLOSE.NOT_APPROVED);
-    const previous = this.ctx.getWebSockets("pid:" + pid).filter((ws) => ws.readyState === WebSocket.OPEN);
-    if (this.learners().length - previous.length >= L.MAX_LEARNER_CONNECTIONS) return rejectSocket(CLOSE.ROOM_FULL);
+    if (p?.status === "denied") return { code: CLOSE.NOT_APPROVED };
+    const previous = this.pidSockets(pid);
+    if (this.learners().length - previous.length >= L.MAX_LEARNER_CONNECTIONS) return { code: CLOSE.ROOM_FULL };
     if (!p) {
-      if (m.participants >= L.MAX_PARTICIPANTS) return rejectSocket(CLOSE.ROOM_FULL);
-      if (m.requireApproval && (await this.waitingList()).length >= L.MAX_WAITING) return rejectSocket(CLOSE.ROOM_FULL);
+      if (m.participants >= L.MAX_PARTICIPANTS) return { code: CLOSE.ROOM_FULL };
+      if (m.requireApproval && (await this.waitingList()).length >= L.MAX_WAITING) return { code: CLOSE.ROOM_FULL };
       p = { pid, status: m.requireApproval ? "waiting" : "admitted", name: "", asked: 0, first: new Date().toISOString() };
       m.participants++;
       await this.ctx.storage.put("p:" + pid, p);
@@ -297,30 +368,32 @@ export class Room extends DurableObject {
       p.status = "admitted";
       await this.ctx.storage.put("p:" + pid, p);
     }
-    for (const ws of previous) this.closeWs(ws, CLOSE.SUPERSEDED);
+    return { p, pid, previous };
+  }
 
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    this.ctx.acceptWebSocket(server, ["learner", "pid:" + pid]);
-    server.serializeAttachment({ role: "learner", pid, status: p.status, keyGen: m.keyGen,
+  async welcome(ws, { p, pid, previous }) {
+    const m = this.meta, now = Date.now();
+    for (const old of previous) if (old !== ws) this.closeWs(old, CLOSE.SUPERSEDED);
+    ws.serializeAttachment({ role: "learner", pid, status: p.status, keyGen: m.keyGen,
       tokens: L.RATE_BURST, last: now, drops: 0, since: new Date(now).toISOString() });
     const replies = p.status === "admitted" ? await this.repliesFor(pid) : [];
-    this.send(server, {
+    this.send(ws, {
       t: "welcome", room: m.room, pid, status: p.status, window: m.window,
       shown: p.status === "admitted" ? await this.shownItems() : [], limits: L.publicLimits(), ...(replies.length ? { replies } : {}),
     });
     this.toTeachers({ t: "people", ...(await this.people()) });
-    return new Response(null, { status: 101, webSocket: client });
+    this.disarmSweep();
   }
 
   async joinTeacher() {
     if (!this.meta) return rejectSocket(CLOSE.ROOM_NOT_FOUND);
-    this.sweepTeachers();
+    this.sweepUnauthed();
     if (this.ctx.getWebSockets("teacher").length >= L.MAX_TEACHER_CONNECTIONS) return rejectSocket(CLOSE.ROOM_FULL);
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ["teacher"]);
     server.serializeAttachment({ role: "teacher", authed: false, openedAt: Date.now() });
+    this.armSweep();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -329,7 +402,8 @@ export class Room extends DurableObject {
     const a = ws.deserializeAttachment();
     if (!a) return this.closeWs(ws, CLOSE.BAD_MESSAGE);
     if (!this.meta) return this.closeWs(ws, CLOSE.ROOM_EXPIRED);
-    this.sweepTeachers();
+    this.sweepUnauthed();
+    if (a.role === "pending") return this.onPending(ws, raw);
     if (a.role === "learner") return this.onLearner(ws, a, raw);
     return this.onTeacher(ws, a, raw);
   }
@@ -466,6 +540,7 @@ export class Room extends DurableObject {
       if (m.t !== "auth" || !(await this.isAdmin(m.adminKey))) return this.closeWs(ws, CLOSE.UNAUTHORIZED);
       a.authed = true;
       ws.serializeAttachment(a);
+      this.disarmSweep();
       return reply(await this.stateMessage());
     }
     const meta = this.meta;
@@ -502,7 +577,7 @@ export class Room extends DurableObject {
         if (!p) return reply({ t: "error", code: ERR.NOT_FOUND });
         p.status = "denied";
         await this.ctx.storage.put("p:" + m.pid, p);
-        for (const l of this.ctx.getWebSockets("pid:" + m.pid)) this.closeWs(l, CLOSE.NOT_APPROVED);
+        for (const l of this.pidSockets(m.pid)) this.closeWs(l, CLOSE.NOT_APPROVED);
         reply({ t: "ack" });
         return this.toTeachers({ t: "people", ...(await this.people()) });
       }
@@ -609,7 +684,7 @@ export class Room extends DurableObject {
       if (!p || p.status === "admitted") continue;
       p.status = "admitted";
       await this.ctx.storage.put("p:" + id, p);
-      for (const ws of this.ctx.getWebSockets("pid:" + id)) {
+      for (const ws of this.pidSockets(id)) {
         const a = ws.deserializeAttachment();
         a.status = "admitted";
         ws.serializeAttachment(a);

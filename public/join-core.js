@@ -5,8 +5,9 @@
 // Same data rules as a player (format spec extensions/live.md §2.3, PROTOCOL.md §7): it sends only `ask`,
 // `vote`, `confused` (the learner's own tap), `name` (only if the learner typed one), `activities` (to learn
 // the room's polls; no learner data) and `ping`. The pid is random, made on the device, and kept in localStorage (memory if storage is blocked).
-// It never makes an HTTP request: the only network use is the learner WebSocket, whose URL carries the key
-// as the protocol defines. The room and key come from the page's fragment, which browsers never send.
+// It never makes an HTTP request: the only network use is the learner WebSocket. Its URL carries only the room;
+// the key and pid go in the first message (`join`), so that they never appear in a URL or a log (PROTOCOL.md §3).
+// The room and key come from the page's fragment, which browsers never send.
 
 export const RE = Object.freeze({
   room: /^r-[a-z2-7]{8}$/,
@@ -56,12 +57,17 @@ export function parseFragment(hash) {
   return RE.room.test(room) && RE.key.test(key) ? { room, key } : null;
 }
 
-/** The learner WebSocket URL on the page's own origin (http → ws, https → wss). */
-export function socketUrl(origin, room, key, pid) {
+/** The learner WebSocket URL on the page's own origin (http → ws, https → wss). Only the room: the key and pid go in joinMessage. */
+export function socketUrl(origin, room) {
   const u = new URL(origin);
   const scheme = u.protocol === "https:" ? "wss:" : u.protocol === "http:" ? "ws:" : null;
-  if (!scheme || !RE.room.test(room) || !RE.key.test(key) || !RE.pid.test(pid)) return null;
-  return `${scheme}//${u.host}/ws?room=${encodeURIComponent(room)}&key=${encodeURIComponent(key)}&pid=${encodeURIComponent(pid)}`;
+  if (!scheme || !RE.room.test(room)) return null;
+  return `${scheme}//${u.host}/ws?room=${encodeURIComponent(room)}`;
+}
+
+/** The first message on the learner socket (PROTOCOL.md §3); null if the key or pid is malformed. */
+export function joinMessage(key, pid) {
+  return RE.key.test(key) && RE.pid.test(pid) ? { v: 1, t: "join", key, pid } : null;
 }
 
 // ------------------------------------------------------------------ retry policy (same table as the Studio player)
@@ -349,8 +355,8 @@ export class JoinClient {
 
   connect() {
     this.clearTimers();
-    const url = socketUrl(this.d.origin, this.room, this.key, this.pid());
-    if (!url) return this.set("stopped", { reason: "bad_link" });
+    const url = socketUrl(this.d.origin, this.room), hello = joinMessage(this.key, this.pid());
+    if (!url || !hello) return this.set("stopped", { reason: "bad_link" });
     let s;
     try { s = new this.d.WebSocket(url); } catch { return this.onClose(1006); }
     this.ws = s;
@@ -361,7 +367,11 @@ export class JoinClient {
     this.declared = null;
     this.set("connecting");
     s.onmessage = (ev) => { if (this.ws === s) this.onMessage(ev.data); };
-    s.onopen = () => { if (this.ws === s) this.timers.ping = this.d.setInterval(() => this.send({ t: "ping" }), PING_MS); };
+    s.onopen = () => {
+      if (this.ws !== s) return;
+      this.send(hello);   // first, before anything else; the server closes a socket that sends something else or nothing
+      this.timers.ping = this.d.setInterval(() => this.send({ t: "ping" }), PING_MS);
+    };
     s.onclose = (ev) => { if (this.ws !== s) return; this.ws = null; this.onClose(ev && typeof ev.code === "number" ? ev.code : 1006); };
     s.onerror = () => {};
   }
