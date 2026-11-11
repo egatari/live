@@ -116,6 +116,21 @@ describe("join page: served", () => {
     expect((await SELF.fetch(ORIGIN + "/room")).headers.get("content-security-policy")).toBe(STRICT_CSP);
   });
 
+  it("every HTML page is no-transform (nothing injected by the CDN); scripts and styles are not", async () => {
+    for (const p of ["/", "/room", "/join"]) {
+      const res = await SELF.fetch(ORIGIN + p);
+      expect(res.status, p).toBe(200);
+      expect(res.headers.get("content-type"), p).toMatch(/^text\/html/);
+      expect(res.headers.get("cache-control"), p).toBe("no-cache, no-transform");
+      await res.body?.cancel();
+    }
+    for (const f of ["/join.js", "/join.css", "/teacher.js"]) {
+      const res = await SELF.fetch(ORIGIN + f);
+      expect(res.headers.get("cache-control"), f).toBe("no-cache");
+      await res.body?.cancel();
+    }
+  });
+
   it("its scripts and stylesheet are served under the strict CSP and make no HTTP requests", async () => {
     for (const f of ["/join.js", "/join-core.js", "/join.css"]) {
       const res = await SELF.fetch(ORIGIN + f);

@@ -55,7 +55,11 @@ function pageHeaders(res, origin, page) {
   h.set("cross-origin-opener-policy", "same-origin");
   h.set("cross-origin-resource-policy", "same-origin");
   h.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
-  h.set("cache-control", "no-cache");
+  // HTML: no-transform, so the CDN never rewrites the page (Cloudflare Web Analytics would otherwise inject its beacon script;
+  // the CSP blocks it, but the page must not even carry a third-party script). Not the scripts and styles: no-transform also
+  // turns off the edge's compression
+  const html = (h.get("content-type") || "").startsWith("text/html");
+  h.set("cache-control", html ? "no-cache, no-transform" : "no-cache");
   return new Response(res.body, { status: res.status, headers: h });
 }
 
